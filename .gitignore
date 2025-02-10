@@ -1,0 +1,39 @@
+# Binaries and build artifacts
+clamav-api
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Log files
+*.log
+
+# ClamAV specific
+*.cvd
+*.cld
+*.cud
+
+# Environment files
+.env
+.env.local
+
+# Build directory
+bin/
+dist/ 

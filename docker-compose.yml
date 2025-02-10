@@ -1,0 +1,23 @@
+version: '3'
+
+services:
+  clamav-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "6000:6000"
+    environment:
+      - GIN_MODE=release      # Can be: debug, release, test
+      - CLAMAV_DEBUG=true
+      - CLAMAV_SOCKET=/var/run/clamav/clamd.ctl
+      - CLAMAV_MAX_SIZE=209715200
+      - CLAMAV_HOST=0.0.0.0
+      - CLAMAV_PORT=6000
+    volumes:
+      - clamav-data:/var/lib/clamav
+      - clamav-socket:/var/run/clamav
+
+volumes:
+  clamav-data:
+  clamav-socket: 
