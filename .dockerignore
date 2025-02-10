@@ -1,0 +1,49 @@
+# Git
+.git
+.gitignore
+
+# Docker
+.docker
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# Build artifacts
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+*.test
+
+# Log files
+*.log
+
+# ClamAV specific
+*.cvd
+*.cld
+*.cud
+
+# Environment files
+.env
+.env.local
+
+# Go workspace file
+go.work 

@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
+          cache: true
+
+      - name: Build Binary
+        run: |
+          cd src
+          GOOS=linux GOARCH=amd64 go build -o ../dist/clamav-api-linux-amd64 main.go
+          GOOS=linux GOARCH=arm64 go build -o ../dist/clamav-api-linux-arm64 main.go
+          GOOS=darwin GOARCH=amd64 go build -o ../dist/clamav-api-darwin-amd64 main.go
+          GOOS=darwin GOARCH=arm64 go build -o ../dist/clamav-api-darwin-arm64 main.go
+          cd ..
+          tar czf dist/clamav-api-linux-amd64.tar.gz -C dist clamav-api-linux-amd64
+          tar czf dist/clamav-api-linux-arm64.tar.gz -C dist clamav-api-linux-arm64
+          tar czf dist/clamav-api-darwin-amd64.tar.gz -C dist clamav-api-darwin-amd64
+          tar czf dist/clamav-api-darwin-arm64.tar.gz -C dist clamav-api-darwin-arm64
+
+      - name: Generate Changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          configurationJson: |
+            {
+              "categories": [
+                {
+                  "title": "## 🚀 Features",
+                  "labels": ["feature", "enhancement"]
+                },
+                {
+                  "title": "## 🐛 Fixes",
+                  "labels": ["fix", "bug"]
+                },
+                {
+                  "title": "## 📦 Dependencies",
+                  "labels": ["dependencies"]
+                }
+              ]
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.tar.gz
+          body: ${{steps.changelog.outputs.changelog}}
+          draft: false
+          prerelease: false
+          generate_release_notes: true 
