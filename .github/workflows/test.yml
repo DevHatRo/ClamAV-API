@@ -35,6 +35,11 @@ jobs:
         # Check daemon status
         sudo systemctl status clamav-daemon
 
+    - name: Update Go dependencies
+      run: |
+        cd src
+        go mod tidy
+
     - name: Run Tests
       run: |
         cd src
