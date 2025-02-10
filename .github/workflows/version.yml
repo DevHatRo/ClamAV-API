@@ -5,6 +5,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   version:
     runs-on: ubuntu-latest
@@ -12,6 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Bump version and push tag
         id: semver
@@ -20,4 +25,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
           DEFAULT_BUMP: patch
-          RELEASE_BRANCHES: main 
+          RELEASE_BRANCHES: main
+          INITIAL_VERSION: 0.1.0
+
+      - name: Output version
+        run: echo "Bumped version to ${{ steps.semver.outputs.new_tag }}" 
