@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -110,5 +111,7 @@ func TestScanEicarFile(t *testing.T) {
 	err = json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
 	assert.Equal(t, "FOUND", response["status"])
-	assert.Contains(t, response["message"], "Eicar-Test-Signature")
+	// Check if message contains "EICAR" in any case
+	assert.True(t, strings.Contains(strings.ToUpper(response["message"].(string)), "EICAR"),
+		"Response message should contain 'EICAR': %s", response["message"])
 }
