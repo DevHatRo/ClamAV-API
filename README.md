@@ -13,8 +13,61 @@ A RESTful API service for ClamAV antivirus scanning, built with Go. This service
 - 🔬 Comprehensive test coverage
 - 🏥 Health check endpoint for monitoring
 - 📊 Scan timing metrics in responses
+- 🎯 Helm chart for Kubernetes deployment
 
 ## Quick Start
+
+### Using Helm
+
+```bash
+# Add the DevHat Helm repository
+helm repo add devhat https://devhatro.github.io/helm-charts
+
+# Update Helm repositories
+helm repo update
+
+# Install ClamAV API
+helm install clamav-api devhat/clamav-api
+```
+
+#### Helm Configuration
+
+You can customize the installation by creating a values.yaml file:
+
+```yaml
+# values.yaml
+replicaCount: 2
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: clamav.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 100m
+    memory: 1Gi
+
+config:
+  debug: false
+  maxSize: "209715200"
+```
+
+Then install with custom values:
+```bash
+helm install clamav-api devhat/clamav-api -f values.yaml
+```
 
 ### Using Docker Compose
 
