@@ -5,8 +5,6 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
 
 jobs:
   release:
@@ -14,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -21,8 +21,14 @@ jobs:
           go-version: '1.20'
           cache: true
 
+      - name: Update Go dependencies
+        run: |
+          cd src
+          go mod tidy
+
       - name: Build Binary
         run: |
+          mkdir -p dist
           cd src
           GOOS=linux GOARCH=amd64 go build -o ../dist/clamav-api-linux-amd64 main.go
           GOOS=linux GOARCH=arm64 go build -o ../dist/clamav-api-linux-arm64 main.go
@@ -66,4 +72,6 @@ jobs:
           body: ${{steps.changelog.outputs.changelog}}
           draft: false
           prerelease: false
-          generate_release_notes: true 
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
