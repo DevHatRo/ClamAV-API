@@ -18,6 +18,7 @@ func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.Default()
 	router.POST("/api/scan", handleScan)
+	router.POST("/api/stream-scan", handleStreamScan)
 	router.GET("/api/health-check", handleHealthCheck)
 	return router
 }
@@ -109,6 +110,49 @@ func TestScanEicarFile(t *testing.T) {
 
 	var response map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "FOUND", response["status"])
+	// Check if message contains "EICAR" in any case
+	assert.True(t, strings.Contains(strings.ToUpper(response["message"].(string)), "EICAR"),
+		"Response message should contain 'EICAR': %s", response["message"])
+}
+
+func TestStreamScanCleanFile(t *testing.T) {
+	router := setupRouter()
+
+	// Create a clean test content
+	content := []byte("This is a clean file for streaming test")
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/stream-scan", bytes.NewReader(content))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.ContentLength = int64(len(content))
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "OK", response["status"])
+}
+
+func TestStreamScanEicarFile(t *testing.T) {
+	router := setupRouter()
+
+	// Create EICAR test content
+	eicarString := []byte(`X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/stream-scan", bytes.NewReader(eicarString))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.ContentLength = int64(len(eicarString))
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
 	assert.Equal(t, "FOUND", response["status"])
 	// Check if message contains "EICAR" in any case

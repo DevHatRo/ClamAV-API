@@ -6,6 +6,7 @@ A RESTful API service for ClamAV antivirus scanning, built with Go. This service
 
 - 🔍 Real-time virus scanning via REST API
 - 🚀 High-performance Go implementation
+- 🌊 Streaming scan support for large files
 - 🔄 Automatic ClamAV database updates
 - 🏗️ Multi-architecture support (amd64, arm64, arm/v7, arm/v6)
 - 🐳 Docker and docker-compose support
@@ -77,14 +78,29 @@ docker compose up
 
 ### API Usage
 
-Scan a file:
+#### Health Check
+```bash
+curl http://localhost:6000/api/health-check
+```
+
+#### Scan File (Multipart Upload)
 ```bash
 curl -F "file=@/path/to/file" http://localhost:6000/api/scan
 ```
 
-Check service health:
+#### Stream Scan (Direct Binary Upload)
 ```bash
-curl http://localhost:6000/api/health-check
+# Stream scan - useful for large files or when you want to stream data directly
+curl -X POST \
+  --data-binary "@/path/to/file" \
+  -H "Content-Type: application/octet-stream" \
+  http://localhost:6000/api/stream-scan
+
+# Or pipe data directly
+cat /path/to/file | curl -X POST \
+  --data-binary @- \
+  -H "Content-Type: application/octet-stream" \
+  http://localhost:6000/api/stream-scan
 ```
 
 ## Configuration

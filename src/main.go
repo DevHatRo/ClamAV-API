@@ -155,6 +155,63 @@ func handleScan(c *gin.Context) {
 	})
 }
 
+func handleStreamScan(c *gin.Context) {
+	// Initialize ClamAV client
+	clam, err := getClamdClient()
+	if err != nil {
+		c.JSON(502, gin.H{
+			"status":  "Clamd service down",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Get the request body as a stream
+	body := c.Request.Body
+	defer body.Close()
+
+	// Check content length
+	contentLength := c.Request.ContentLength
+	if contentLength > config.MaxContentLength {
+		c.JSON(400, gin.H{
+			"message": fmt.Sprintf("File too large. Maximum size is %d bytes", config.MaxContentLength),
+		})
+		return
+	}
+
+	// Scan the stream
+	startTime := time.Now()
+
+	// Create done channel for scan
+	done := make(chan bool)
+	response, scanErr := clam.ScanStream(body, done)
+	if scanErr != nil {
+		c.JSON(502, gin.H{
+			"status":  "Clamd service down",
+			"message": scanErr.Error(),
+		})
+		return
+	}
+
+	// Process scan results
+	result := <-response
+	elapsed := time.Since(startTime).Seconds()
+
+	if result.Status == "ERROR" {
+		c.JSON(502, gin.H{
+			"status":  "Clamd service down",
+			"message": result.Description,
+		})
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"status":  result.Status,
+		"message": result.Description,
+		"time":    elapsed,
+	})
+}
+
 func handleHealthCheck(c *gin.Context) {
 	clam, err := getClamdClient()
 	if err != nil {
@@ -190,6 +247,7 @@ func main() {
 
 	// Register routes
 	router.POST("/api/scan", handleScan)
+	router.POST("/api/stream-scan", handleStreamScan)
 	router.GET("/api/health-check", handleHealthCheck)
 
 	// Start server
