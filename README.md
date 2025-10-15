@@ -110,6 +110,7 @@ Environment variables:
 - `CLAMAV_DEBUG`: Enable debug mode (true/false)
 - `CLAMAV_SOCKET`: ClamAV Unix socket path
 - `CLAMAV_MAX_SIZE`: Maximum file size in bytes
+- `CLAMAV_SCAN_TIMEOUT`: Scan timeout in seconds (default: 300)
 - `CLAMAV_HOST`: Host to listen on
 - `CLAMAV_PORT`: Port to listen on
 
@@ -125,6 +126,8 @@ Command line flags:
         Maximum file size in bytes (default 209715200)
   -port string
         Port to listen on (default "6000")
+  -scan-timeout int
+        Scan timeout in seconds (default 300)
   -socket string
         ClamAV Unix socket path (default "/run/clamav/clamd.ctl")
 ```
@@ -155,6 +158,22 @@ Command line flags:
     "time": 0.002342
 }
 ```
+
+### Scan Response (Timeout)
+```json
+{
+    "status": "Scan timeout",
+    "message": "Scan operation timed out after 300 seconds"
+}
+```
+
+## Security Features
+
+- ✅ Content-Length validation (stream scan requires valid Content-Length header)
+- ✅ Size enforcement with `io.LimitedReader` to prevent memory exhaustion
+- ✅ Scan timeout protection (configurable, default 300 seconds)
+- ✅ Channel cleanup to prevent goroutine leaks
+- ✅ DoS protection through size limits and timeouts
 
 ## Development
 
