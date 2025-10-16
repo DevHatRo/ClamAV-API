@@ -70,9 +70,16 @@ jobs:
           name: build-artifacts
           path: bin/
 
-      - name: Change permissions
+      - name: Verify and prepare binaries
         run: |
+          ls -lh bin/
           chmod +x bin/*
+          # Verify the specific binary exists for this platform
+          if [ ! -f "bin/clamav-api-linux-${{ matrix.platform }}" ]; then
+            echo "Error: Binary bin/clamav-api-linux-${{ matrix.platform }} not found"
+            exit 1
+          fi
+          echo "Binary found: bin/clamav-api-linux-${{ matrix.platform }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -21,7 +21,6 @@ LICENSE
 *.md
 
 # Build artifacts
-bin/
 dist/
 *.exe
 *.exe~
