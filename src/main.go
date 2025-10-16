@@ -345,8 +345,12 @@ func startGRPCServer(errChan chan<- error) {
 		return
 	}
 
-	// Create gRPC server
-	grpcServer := grpc.NewServer()
+	// Create gRPC server with options
+	maxMsgSize := int(config.MaxContentLength)
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(maxMsgSize),
+		grpc.MaxSendMsgSize(maxMsgSize),
+	)
 
 	// Register service
 	pb.RegisterClamAVScannerServer(grpcServer, NewGRPCServer())
@@ -355,6 +359,7 @@ func startGRPCServer(errChan chan<- error) {
 	reflection.Register(grpcServer)
 
 	log.Printf("Starting gRPC server on %s", addr)
+	log.Printf("gRPC max message size: %d bytes", maxMsgSize)
 	if err := grpcServer.Serve(lis); err != nil {
 		errChan <- fmt.Errorf("gRPC server error: %w", err)
 	}
