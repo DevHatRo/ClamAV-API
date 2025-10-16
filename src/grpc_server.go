@@ -122,9 +122,9 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 			filename = req.Filename
 		}
 
-		// Check size limit
-		totalSize += int64(len(req.Chunk))
-		if totalSize > config.MaxContentLength {
+		// Check size limit before incrementing
+		chunkSize := int64(len(req.Chunk))
+		if totalSize+chunkSize > config.MaxContentLength {
 			return status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", config.MaxContentLength)
 		}
 
@@ -132,6 +132,9 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 		if _, err := buffer.Write(req.Chunk); err != nil {
 			return status.Errorf(codes.Internal, "failed to write chunk: %v", err)
 		}
+
+		// Update total size after successful write
+		totalSize += chunkSize
 
 		// If this is the last chunk, break
 		if req.IsLast {
