@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -18,6 +19,7 @@ type Config struct {
 	MaxContentLength int64
 	Host             string
 	Port             string
+	ScanTimeout      time.Duration
 }
 
 // getEnvWithDefault gets an environment variable or returns the default value
@@ -56,6 +58,7 @@ var config = Config{
 	MaxContentLength: 209715200, // 200MB
 	Host:             "0.0.0.0",
 	Port:             "6000",
+	ScanTimeout:      300 * time.Second, // 5 minutes
 }
 
 func parseConfig() {
@@ -65,6 +68,7 @@ func parseConfig() {
 	maxSize := flag.Int64("max-size", config.MaxContentLength, "Maximum file size in bytes")
 	host := flag.String("host", config.Host, "Host to listen on")
 	port := flag.String("port", config.Port, "Port to listen on")
+	scanTimeout := flag.Int64("scan-timeout", int64(config.ScanTimeout.Seconds()), "Scan timeout in seconds")
 
 	// Parse flags
 	flag.Parse()
@@ -75,6 +79,8 @@ func parseConfig() {
 	config.MaxContentLength = getEnvInt64WithDefault("CLAMAV_MAX_SIZE", *maxSize)
 	config.Host = getEnvWithDefault("CLAMAV_HOST", *host)
 	config.Port = getEnvWithDefault("CLAMAV_PORT", *port)
+	timeoutSeconds := getEnvInt64WithDefault("CLAMAV_SCAN_TIMEOUT", *scanTimeout)
+	config.ScanTimeout = time.Duration(timeoutSeconds) * time.Second
 
 	// Set Gin mode based on environment variables
 	if mode := os.Getenv("GIN_MODE"); mode != "" {
@@ -90,6 +96,7 @@ func parseConfig() {
 	log.Printf("Debug: %v", config.Debug)
 	log.Printf("ClamAV Socket: %s", config.ClamdUnixSocket)
 	log.Printf("Max Content Length: %d bytes", config.MaxContentLength)
+	log.Printf("Scan Timeout: %.0f seconds", config.ScanTimeout.Seconds())
 	log.Printf("Listen Address: %s:%s", config.Host, config.Port)
 	log.Printf("Gin Mode: %s", gin.Mode())
 }
@@ -127,6 +134,8 @@ func handleScan(c *gin.Context) {
 
 	// Create done channel for scan
 	done := make(chan bool)
+	defer close(done) // Ensure channel is closed to prevent leaks
+
 	response, scanErr := clam.ScanStream(file, done)
 	if scanErr != nil {
 		c.JSON(502, gin.H{
@@ -136,23 +145,106 @@ func handleScan(c *gin.Context) {
 		return
 	}
 
-	// Process scan results
-	result := <-response // Get first result from channel
-	elapsed := time.Since(startTime).Seconds()
+	// Process scan results with timeout
+	select {
+	case result := <-response:
+		elapsed := time.Since(startTime).Seconds()
 
-	if result.Status == "ERROR" {
+		if result.Status == "ERROR" {
+			c.JSON(502, gin.H{
+				"status":  "Clamd service down",
+				"message": result.Description,
+			})
+			return
+		}
+
+		c.JSON(200, gin.H{
+			"status":  result.Status,
+			"message": result.Description,
+			"time":    elapsed,
+		})
+	case <-time.After(config.ScanTimeout):
+		c.JSON(504, gin.H{
+			"status":  "Scan timeout",
+			"message": fmt.Sprintf("Scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds()),
+		})
+	}
+}
+
+func handleStreamScan(c *gin.Context) {
+	// Initialize ClamAV client
+	clam, err := getClamdClient()
+	if err != nil {
 		c.JSON(502, gin.H{
 			"status":  "Clamd service down",
-			"message": result.Description,
+			"message": err.Error(),
 		})
 		return
 	}
 
-	c.JSON(200, gin.H{
-		"status":  result.Status,
-		"message": result.Description,
-		"time":    elapsed,
-	})
+	// Check content length - reject if missing, -1, or too large
+	contentLength := c.Request.ContentLength
+	if contentLength <= 0 {
+		c.JSON(400, gin.H{
+			"message": "Content-Length header is required and must be greater than 0",
+		})
+		return
+	}
+	if contentLength > config.MaxContentLength {
+		c.JSON(400, gin.H{
+			"message": fmt.Sprintf("File too large. Maximum size is %d bytes", config.MaxContentLength),
+		})
+		return
+	}
+
+	// Wrap body with a LimitedReader to enforce size limit
+	body := c.Request.Body
+	defer body.Close()
+	limitedReader := &io.LimitedReader{
+		R: body,
+		N: config.MaxContentLength,
+	}
+
+	// Scan the stream
+	startTime := time.Now()
+
+	// Create done channel for scan
+	done := make(chan bool)
+	defer close(done) // Ensure channel is closed to prevent leaks
+
+	response, scanErr := clam.ScanStream(limitedReader, done)
+	if scanErr != nil {
+		c.JSON(502, gin.H{
+			"status":  "Clamd service down",
+			"message": scanErr.Error(),
+		})
+		return
+	}
+
+	// Process scan results with timeout
+	select {
+	case result := <-response:
+		elapsed := time.Since(startTime).Seconds()
+
+		if result.Status == "ERROR" {
+			c.JSON(502, gin.H{
+				"status":  "Clamd service down",
+				"message": result.Description,
+			})
+			return
+		}
+
+		c.JSON(200, gin.H{
+			"status":  result.Status,
+			"message": result.Description,
+			"time":    elapsed,
+		})
+	case <-time.After(config.ScanTimeout):
+		c.JSON(504, gin.H{
+			"status":  "Scan timeout",
+			"message": fmt.Sprintf("Scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds()),
+		})
+	}
 }
 
 func handleHealthCheck(c *gin.Context) {
@@ -190,6 +282,7 @@ func main() {
 
 	// Register routes
 	router.POST("/api/scan", handleScan)
+	router.POST("/api/stream-scan", handleStreamScan)
 	router.GET("/api/health-check", handleHealthCheck)
 
 	// Start server

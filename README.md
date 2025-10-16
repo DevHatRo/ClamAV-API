@@ -6,6 +6,7 @@ A RESTful API service for ClamAV antivirus scanning, built with Go. This service
 
 - 🔍 Real-time virus scanning via REST API
 - 🚀 High-performance Go implementation
+- 🌊 Streaming scan support for large files
 - 🔄 Automatic ClamAV database updates
 - 🏗️ Multi-architecture support (amd64, arm64, arm/v7, arm/v6)
 - 🐳 Docker and docker-compose support
@@ -77,14 +78,29 @@ docker compose up
 
 ### API Usage
 
-Scan a file:
+#### Health Check
+```bash
+curl http://localhost:6000/api/health-check
+```
+
+#### Scan File (Multipart Upload)
 ```bash
 curl -F "file=@/path/to/file" http://localhost:6000/api/scan
 ```
 
-Check service health:
+#### Stream Scan (Direct Binary Upload)
 ```bash
-curl http://localhost:6000/api/health-check
+# Stream scan - useful for large files or when you want to stream data directly
+curl -X POST \
+  --data-binary "@/path/to/file" \
+  -H "Content-Type: application/octet-stream" \
+  http://localhost:6000/api/stream-scan
+
+# Or pipe data directly
+cat /path/to/file | curl -X POST \
+  --data-binary @- \
+  -H "Content-Type: application/octet-stream" \
+  http://localhost:6000/api/stream-scan
 ```
 
 ## Configuration
@@ -94,6 +110,7 @@ Environment variables:
 - `CLAMAV_DEBUG`: Enable debug mode (true/false)
 - `CLAMAV_SOCKET`: ClamAV Unix socket path
 - `CLAMAV_MAX_SIZE`: Maximum file size in bytes
+- `CLAMAV_SCAN_TIMEOUT`: Scan timeout in seconds (default: 300)
 - `CLAMAV_HOST`: Host to listen on
 - `CLAMAV_PORT`: Port to listen on
 
@@ -109,6 +126,8 @@ Command line flags:
         Maximum file size in bytes (default 209715200)
   -port string
         Port to listen on (default "6000")
+  -scan-timeout int
+        Scan timeout in seconds (default 300)
   -socket string
         ClamAV Unix socket path (default "/run/clamav/clamd.ctl")
 ```
@@ -139,6 +158,22 @@ Command line flags:
     "time": 0.002342
 }
 ```
+
+### Scan Response (Timeout)
+```json
+{
+    "status": "Scan timeout",
+    "message": "Scan operation timed out after 300 seconds"
+}
+```
+
+## Security Features
+
+- ✅ Content-Length validation (stream scan requires valid Content-Length header)
+- ✅ Size enforcement with `io.LimitedReader` to prevent memory exhaustion
+- ✅ Scan timeout protection (configurable, default 300 seconds)
+- ✅ Channel cleanup to prevent goroutine leaks
+- ✅ DoS protection through size limits and timeouts
 
 ## Development
 
