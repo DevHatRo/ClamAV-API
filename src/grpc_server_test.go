@@ -245,12 +245,12 @@ func TestGRPCScanStreamTooLarge(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Send data larger than max size
-	chunkSize := 1024 * 1024 // 1MB chunks
+	chunkSize := int64(1024 * 1024) // 1MB chunks
 	totalSize := config.MaxContentLength + chunkSize
 
-	for i := int64(0); i < totalSize; i += int64(chunkSize) {
+	for i := int64(0); i < totalSize; i += chunkSize {
 		chunk := make([]byte, chunkSize)
-		isLast := i+int64(chunkSize) >= totalSize
+		isLast := i+chunkSize >= totalSize
 		filename := ""
 		if i == 0 {
 			filename = "large-stream.bin"
