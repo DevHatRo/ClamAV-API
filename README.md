@@ -8,6 +8,7 @@ A RESTful API service for ClamAV antivirus scanning, built with Go. This service
 - 🚀 High-performance Go implementation
 - 🌊 Streaming scan support for large files
 - ⚡ gRPC support with bidirectional streaming
+- 📝 Structured logging with Uber Zap
 - 🔄 Automatic ClamAV database updates
 - 🏗️ Multi-architecture support (amd64, arm64, arm/v7, arm/v6)
 - 🐳 Docker and docker-compose support
@@ -243,6 +244,57 @@ Command line flags:
 - ✅ Native support for multiple languages
 - ✅ HTTP/2 multiplexing
 
+## Logging
+
+The application uses structured logging with [Uber Zap](https://github.com/uber-go/zap) for high-performance, structured logging.
+
+### Log Levels
+
+- **Production mode**: INFO level and above
+- **Development mode**: DEBUG level and above
+
+### Logged Events
+
+**REST API:**
+- File uploads with size and client IP
+- Scan results (status, virus name, timing)
+- Errors and timeouts
+- Health check results
+
+**gRPC API:**
+- RPC method calls with parameters
+- Scan results with timing
+- Stream progress and errors
+- Context cancellations
+
+**System:**
+- Server startup and configuration
+- Connection errors
+- Graceful shutdown signals
+
+### Log Format
+
+```json
+{
+  "level": "info",
+  "timestamp": "2025-10-16T12:00:00Z",
+  "msg": "Scan completed",
+  "filename": "test.pdf",
+  "status": "OK",
+  "elapsed_seconds": 0.123,
+  "client_ip": "192.168.1.1"
+}
+```
+
+### Configuration
+
+Set log level via environment:
+```bash
+ENV=production  # INFO level
+ENV=development # DEBUG level
+CLAMAV_DEBUG=true # DEBUG level regardless of ENV
+```
+
 ## Security Features
 
 - ✅ Content-Length validation (stream scan requires valid Content-Length header)
@@ -250,6 +302,7 @@ Command line flags:
 - ✅ Scan timeout protection (configurable, default 300 seconds)
 - ✅ Channel cleanup to prevent goroutine leaks
 - ✅ DoS protection through size limits and timeouts
+- ✅ Structured audit logging for security monitoring
 
 ## Development
 
