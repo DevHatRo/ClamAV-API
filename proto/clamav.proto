@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package clamav;
 
-option go_package = "./proto";
+option go_package = "clamav-api/proto;proto";
 
 // ClamAV scanning service
 service ClamAVScanner {
