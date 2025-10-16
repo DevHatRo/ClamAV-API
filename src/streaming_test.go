@@ -353,11 +353,11 @@ func TestGRPCScanFileWithVariousSizes(t *testing.T) {
 	client := getTestClient(t)
 
 	sizes := []int{
-		10,                 // 10 bytes
-		1024,               // 1 KB
-		1024 * 1024,        // 1 MB
-		10 * 1024 * 1024,   // 10 MB
-		100 * 1024 * 1024,  // 100 MB
+		10,                // 10 bytes
+		1024,              // 1 KB
+		1024 * 1024,       // 1 MB
+		10 * 1024 * 1024,  // 10 MB
+		100 * 1024 * 1024, // 100 MB
 	}
 
 	for _, size := range sizes {
@@ -393,10 +393,10 @@ func TestGRPCStreamChunkSizes(t *testing.T) {
 	client := getTestClient(t)
 
 	chunkSizes := []int{
-		1024,              // 1 KB
-		64 * 1024,         // 64 KB (common chunk size)
-		1024 * 1024,       // 1 MB
-		10 * 1024 * 1024,  // 10 MB
+		1024,             // 1 KB
+		64 * 1024,        // 64 KB (common chunk size)
+		1024 * 1024,      // 1 MB
+		10 * 1024 * 1024, // 10 MB
 	}
 
 	for _, chunkSize := range chunkSizes {
@@ -568,4 +568,3 @@ func byteSizeString(size int) string {
 	}
 	return fmt.Sprintf("%.0f%cB", float64(size)/float64(div), "KMGTPE"[exp])
 }
-
