@@ -30,6 +30,10 @@ go.work
 *.cld
 *.cud
 
+# Generated proto files (regenerate with ./scripts/generate-proto.sh)
+proto/*.pb.go
+!proto/go.mod
+
 # Environment files
 .env
 .env.local

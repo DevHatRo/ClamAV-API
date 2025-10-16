@@ -3,8 +3,12 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
-
+      - "v*"
+    paths-ignore:
+      - "docs/**"
+      - "examples/**"
+      - "README.md"
+      - "README"
 
 jobs:
   release:
@@ -18,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.20'
+          go-version: "1.25"
           cache: true
 
       - name: Update Go dependencies
@@ -28,17 +32,7 @@ jobs:
 
       - name: Build Binary
         run: |
-          mkdir -p dist
-          cd src
-          GOOS=linux GOARCH=amd64 go build -o ../dist/clamav-api-linux-amd64 main.go
-          GOOS=linux GOARCH=arm64 go build -o ../dist/clamav-api-linux-arm64 main.go
-          GOOS=darwin GOARCH=amd64 go build -o ../dist/clamav-api-darwin-amd64 main.go
-          GOOS=darwin GOARCH=arm64 go build -o ../dist/clamav-api-darwin-arm64 main.go
-          cd ..
-          tar czf dist/clamav-api-linux-amd64.tar.gz -C dist clamav-api-linux-amd64
-          tar czf dist/clamav-api-linux-arm64.tar.gz -C dist clamav-api-linux-arm64
-          tar czf dist/clamav-api-darwin-amd64.tar.gz -C dist clamav-api-darwin-amd64
-          tar czf dist/clamav-api-darwin-arm64.tar.gz -C dist clamav-api-darwin-arm64
+          ./scripts/build.sh
 
       - name: Generate Changelog
         id: changelog
@@ -68,10 +62,10 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            dist/*.tar.gz
+            bin/*
           body: ${{steps.changelog.outputs.changelog}}
           draft: false
           prerelease: false
           generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

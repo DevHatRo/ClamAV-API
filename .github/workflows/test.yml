@@ -40,10 +40,15 @@ jobs:
         cd src
         go mod tidy
 
-    - name: Run Tests
+    - name: Run Unit Tests
       run: |
         cd src
-        go test -v ./... -coverprofile=coverage.txt
+        go test -v -short ./... -coverprofile=coverage.txt
+
+    - name: Run gRPC Tests
+      run: |
+        cd src
+        go test -v -run TestGRPC ./...
 
     - name: Upload coverage
       uses: codecov/codecov-action@v4

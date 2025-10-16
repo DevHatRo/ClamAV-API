@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package clamav;
+
+option go_package = "./proto";
+
+// ClamAV scanning service
+service ClamAVScanner {
+  // Health check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // Scan a file with unary request
+  rpc ScanFile(ScanFileRequest) returns (ScanResponse);
+  
+  // Scan with client streaming (for large files)
+  rpc ScanStream(stream ScanStreamRequest) returns (ScanResponse);
+  
+  // Scan with bidirectional streaming (for multiple files)
+  rpc ScanMultiple(stream ScanStreamRequest) returns (stream ScanResponse);
+}
+
+// Health check request
+message HealthCheckRequest {}
+
+// Health check response
+message HealthCheckResponse {
+  string status = 1;
+  string message = 2;
+}
+
+// Unary scan request
+message ScanFileRequest {
+  bytes data = 1;
+  string filename = 2;
+}
+
+// Streaming scan request
+message ScanStreamRequest {
+  bytes chunk = 1;
+  string filename = 2;
+  bool is_last = 3;
+}
+
+// Scan response
+message ScanResponse {
+  string status = 1;
+  string message = 2;
+  double scan_time = 3;
+  string filename = 4;
+}
+

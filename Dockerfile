@@ -15,7 +15,7 @@ COPY src/ ./
 RUN go mod download
 
 # Build the application with proper GOOS and GOARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o clamav-api main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o clamav-api main.go grpc_server.go
 
 # Final stage
 FROM --platform=$TARGETPLATFORM alpine:latest
@@ -72,6 +72,6 @@ RUN freshclam
 VOLUME ["/var/lib/clamav", "/var/run/clamav"]
 
 WORKDIR /
-EXPOSE 6000
+EXPOSE 6000 9000
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
