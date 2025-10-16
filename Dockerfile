@@ -57,8 +57,10 @@ COPY bin/clamav-api-linux-${TARGETARCH} /app/clamav-api
 RUN chown clamav-api:clamav-api /app/clamav-api && \
     chmod +x /app/clamav-api
 
-# Initial ClamAV database update
-RUN freshclam
+# Note: ClamAV database updates are handled at runtime by:
+# - docker-entrypoint.sh (initial update if needed)
+# - cron job (scheduled updates at 3 AM daily)
+# This ensures fresh virus definitions and deterministic builds
 
 # Declare volumes for persistence
 VOLUME ["/var/lib/clamav", "/var/run/clamav"]

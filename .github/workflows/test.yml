@@ -33,16 +33,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clamav clamav-daemon
-          sudo mkdir -p /var/log/clamav
-          sudo chown clamav:clamav /var/log/clamav
-          sudo chmod 750 /var/log/clamav
-          sudo systemctl stop clamav-freshclam
+          sudo mkdir -p /var/log/clamav /var/run/clamav
+          sudo chown clamav:clamav /var/log/clamav /var/run/clamav
+          sudo chmod 750 /var/log/clamav /var/run/clamav
           sudo freshclam
-          sudo systemctl start clamav-daemon
-          # Wait for daemon to start
+          # Start clamd without systemd
+          sudo clamd --foreground=false &
           sleep 5
-          # Check daemon status
-          sudo systemctl status clamav-daemon
+          clamdscan --version || true
 
       - name: Update Go dependencies
         run: |

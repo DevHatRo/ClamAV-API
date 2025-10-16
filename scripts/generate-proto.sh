@@ -1,6 +1,12 @@
 #!/bin/bash
 
-set -e
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# Resolve repo root (script lives in scripts/)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
 
 # Ensure GOPATH/bin is in PATH
 export PATH="$PATH:$(go env GOPATH)/bin"
