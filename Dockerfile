@@ -1,31 +1,21 @@
-# Build stage for Go API
-FROM --platform=$BUILDPLATFORM golang:1.20-alpine AS builder
+# Final stage with ClamAV
+FROM alpine:latest
 
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
-ARG TARGETOS
 ARG TARGETARCH
 
-WORKDIR /app
-
-# Copy the src directory containing go.mod and main.go
-COPY src/ ./
-
-# Download dependencies
-RUN go mod download
-
-# Build the application with proper GOOS and GOARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o clamav-api main.go grpc_server.go
-
-# Final stage
-FROM --platform=$TARGETPLATFORM alpine:latest
+ENV APP_NAME=clamav-api
+ENV APP_ENV=production
+ENV CLAMAV_PORT=6000
+ENV CLAMAV_GRPC_PORT=9000
+ENV CLAMAV_SOCKET=/var/run/clamav/clamd.ctl
 
 # Install required packages
 RUN apk add --no-cache \
     supervisor \
     clamav \
     clamav-libunrar \
-    dcron
+    dcron \
+    ca-certificates
 
 # Create clamav-api user and group
 RUN addgroup -S clamav-api && \
@@ -61,9 +51,11 @@ RUN chmod +x /docker-entrypoint.sh /init/* && \
     chmod 755 /usr/bin/freshclam && \
     chmod 755 /usr/sbin/clamd
 
-# Copy the Go API from builder stage
-COPY --from=builder /app/clamav-api /app/clamav-api
-RUN chown clamav-api:clamav-api /app/clamav-api
+# Copy pre-built binary from bin directory
+WORKDIR /app
+COPY bin/clamav-api-linux-${TARGETARCH} /app/clamav-api
+RUN chown clamav-api:clamav-api /app/clamav-api && \
+    chmod +x /app/clamav-api
 
 # Initial ClamAV database update
 RUN freshclam
