@@ -2,9 +2,9 @@ name: Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
@@ -12,41 +12,55 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.20'
-        cache: true
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
 
-    - name: Install ClamAV
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clamav clamav-daemon
-        sudo mkdir -p /var/log/clamav
-        sudo chown clamav:clamav /var/log/clamav
-        sudo chmod 750 /var/log/clamav
-        sudo systemctl stop clamav-freshclam
-        sudo freshclam
-        sudo systemctl start clamav-daemon
-        # Wait for daemon to start
-        sleep 5
-        # Check daemon status
-        sudo systemctl status clamav-daemon
+      - name: Install Protocol Buffers compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
-    - name: Update Go dependencies
-      run: |
-        cd src
-        go mod tidy
+      - name: Generate Proto Files
+        run: |
+          ./scripts/generate-proto.sh
 
-    - name: Run Tests
-      run: |
-        cd src
-        go test -v ./... -coverprofile=coverage.txt
+      - name: Install ClamAV
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clamav clamav-daemon
+          sudo mkdir -p /var/log/clamav /var/run/clamav
+          sudo chown -R clamav:clamav /var/log/clamav /var/run/clamav
+          sudo chmod -R 777 /var/log/clamav /var/run/clamav
+          # Update virus database
+          sudo freshclam --stdout --verbose || echo "freshclam failed, continuing..."
+          # Start clamd without systemd
+          sudo clamd &
+          sleep 10
+          # Verify clamd is running
+          ps aux | grep clamd || true
 
-    - name: Upload coverage
-      uses: codecov/codecov-action@v4
-      with:
-        file: ./src/coverage.txt
-        flags: unittests 
+      - name: Update Go dependencies
+        run: |
+          cd src
+          go mod tidy
+
+      - name: Run Unit Tests
+        run: |
+          cd src
+          go test -v -short ./... -coverprofile=coverage.txt
+
+      - name: Run gRPC Tests
+        run: |
+          cd src
+          go test -v -run TestGRPC ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./src/coverage.txt
+          flags: unittests

@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 services:
   clamav-api:
@@ -6,18 +6,21 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "6000:6000"
+      - "6000:6000" # REST API
+      - "9000:9000" # gRPC API
     environment:
-      - GIN_MODE=release      # Can be: debug, release, test
+      - GIN_MODE=release # Can be: debug, release, test
       - CLAMAV_DEBUG=true
       - CLAMAV_SOCKET=/var/run/clamav/clamd.ctl
       - CLAMAV_MAX_SIZE=209715200
       - CLAMAV_HOST=0.0.0.0
       - CLAMAV_PORT=6000
+      - CLAMAV_GRPC_PORT=9000
+      - CLAMAV_ENABLE_GRPC=true
     volumes:
       - clamav-data:/var/lib/clamav
       - clamav-socket:/var/run/clamav
 
 volumes:
   clamav-data:
-  clamav-socket: 
+  clamav-socket:
