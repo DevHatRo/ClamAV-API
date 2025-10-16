@@ -125,7 +125,6 @@ jobs:
           docker manifest push ghcr.io/${{ env.REPO_OWNER_LOWER }}/clamav-api:${{ github.ref_name }}
 
       - name: Create and push latest tag
-        if: "!contains(github.ref_name, 'rc') && !contains(github.ref_name, 'beta')"
         run: |
           docker manifest create ghcr.io/${{ env.REPO_OWNER_LOWER }}/clamav-api:latest \
             ghcr.io/${{ env.REPO_OWNER_LOWER }}/clamav-api:${{ github.ref_name }}-linux-amd64 \
