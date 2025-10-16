@@ -160,10 +160,10 @@ func TestGRPCScanFileTooLarge(t *testing.T) {
 	assert.Error(t, err)
 	// Error could be either our validation or gRPC max message size
 	errMsg := err.Error()
-	assert.True(t, 
-		strings.Contains(errMsg, "file too large") || 
-		strings.Contains(errMsg, "received message larger than max") ||
-		strings.Contains(errMsg, "trying to send message larger than max"),
+	assert.True(t,
+		strings.Contains(errMsg, "file too large") ||
+			strings.Contains(errMsg, "received message larger than max") ||
+			strings.Contains(errMsg, "trying to send message larger than max"),
 		"Expected size limit error, got: %v", err)
 }
 
