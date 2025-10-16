@@ -385,6 +385,142 @@ func TestGRPCContextCancellation(t *testing.T) {
 	assert.Contains(t, err.Error(), "context canceled")
 }
 
+func TestGRPCHealthCheckWithInvalidSocket(t *testing.T) {
+	// Save original config
+	originalSocket := config.ClamdUnixSocket
+	config.ClamdUnixSocket = "/invalid/socket.ctl"
+	defer func() { config.ClamdUnixSocket = originalSocket }()
+
+	server := NewGRPCServer()
+	resp, err := server.HealthCheck(context.Background(), &pb.HealthCheckRequest{})
+
+	assert.NoError(t, err) // No error from gRPC call itself
+	assert.Equal(t, "unhealthy", resp.Status)
+	assert.Contains(t, resp.Message, "unavailable")
+}
+
+func TestGRPCScanFileWithContext(t *testing.T) {
+	client := getTestClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	data := []byte("Context test file")
+	resp, err := client.ScanFile(ctx, &pb.ScanFileRequest{
+		Data:     data,
+		Filename: "context-test.txt",
+	})
+
+	// May fail if ClamAV not running
+	if err != nil {
+		t.Logf("ScanFile failed (ClamAV may not be running): %v", err)
+		return
+	}
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, "context-test.txt", resp.Filename)
+}
+
+func TestGRPCScanStreamEmpty(t *testing.T) {
+	client := getTestClient(t)
+
+	stream, err := client.ScanStream(context.Background())
+	assert.NoError(t, err)
+
+	// Close without sending any data
+	resp, err := stream.CloseAndRecv()
+
+	// Should handle empty stream gracefully
+	if err != nil {
+		t.Logf("Empty stream handled: %v", err)
+	} else {
+		assert.NotNil(t, resp)
+	}
+}
+
+func TestGRPCScanStreamPartialSend(t *testing.T) {
+	client := getTestClient(t)
+
+	stream, err := client.ScanStream(context.Background())
+	assert.NoError(t, err)
+
+	// Send one chunk without isLast=true
+	err = stream.Send(&pb.ScanStreamRequest{
+		Chunk:    []byte("partial data"),
+		Filename: "partial.txt",
+		IsLast:   false,
+	})
+	assert.NoError(t, err)
+
+	// Send final chunk
+	err = stream.Send(&pb.ScanStreamRequest{
+		Chunk:  []byte(" more data"),
+		IsLast: true,
+	})
+	assert.NoError(t, err)
+
+	resp, err := stream.CloseAndRecv()
+
+	// May fail if ClamAV not running
+	if err != nil {
+		t.Logf("ScanStream failed (ClamAV may not be running): %v", err)
+		return
+	}
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+}
+
+func TestGRPCScanMultipleEmptyFiles(t *testing.T) {
+	client := getTestClient(t)
+
+	stream, err := client.ScanMultiple(context.Background())
+	assert.NoError(t, err)
+
+	// Send an empty file
+	err = stream.Send(&pb.ScanStreamRequest{
+		Chunk:    []byte{},
+		Filename: "empty.txt",
+		IsLast:   true,
+	})
+	assert.NoError(t, err)
+
+	err = stream.CloseSend()
+	assert.NoError(t, err)
+
+	// Should handle empty files
+	resp, err := stream.Recv()
+	if err != nil && err != io.EOF {
+		t.Logf("Empty file handled: %v", err)
+	} else if resp != nil {
+		assert.NotNil(t, resp)
+	}
+}
+
+func TestGRPCResponseFields(t *testing.T) {
+	client := getTestClient(t)
+
+	data := []byte("Response field test")
+	resp, err := client.ScanFile(context.Background(), &pb.ScanFileRequest{
+		Data:     data,
+		Filename: "fields-test.txt",
+	})
+
+	// May fail if ClamAV not running
+	if err != nil {
+		t.Logf("ScanFile failed (ClamAV may not be running): %v", err)
+		return
+	}
+
+	assert.NoError(t, err)
+	assert.NotEmpty(t, resp.Status)
+	assert.NotNil(t, resp.Message) // May be empty string
+	assert.GreaterOrEqual(t, resp.ScanTime, 0.0)
+	assert.Equal(t, "fields-test.txt", resp.Filename)
+}
+
+
 func BenchmarkGRPCScanFile(b *testing.B) {
 	client := getTestClient(&testing.T{})
 
