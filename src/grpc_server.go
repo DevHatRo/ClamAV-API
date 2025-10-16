@@ -9,6 +9,7 @@ import (
 
 	pb "clamav-api/proto"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -25,8 +26,11 @@ func NewGRPCServer() *GRPCServer {
 
 // HealthCheck implements the health check RPC
 func (s *GRPCServer) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest) (*pb.HealthCheckResponse, error) {
+	logger := GetLogger()
+
 	clam, err := getClamdClient()
 	if err != nil {
+		logger.Warn("gRPC health check failed: connection error", zap.Error(err))
 		return &pb.HealthCheckResponse{
 			Status:  "unhealthy",
 			Message: fmt.Sprintf("ClamAV service unavailable: %v", err),
@@ -35,12 +39,14 @@ func (s *GRPCServer) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest
 
 	err = clam.Ping()
 	if err != nil {
+		logger.Warn("gRPC health check failed: ping error", zap.Error(err))
 		return &pb.HealthCheckResponse{
 			Status:  "unhealthy",
 			Message: fmt.Sprintf("ClamAV service down: %v", err),
 		}, nil
 	}
 
+	logger.Debug("gRPC health check passed")
 	return &pb.HealthCheckResponse{
 		Status:  "healthy",
 		Message: "ok",
@@ -49,18 +55,31 @@ func (s *GRPCServer) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest
 
 // ScanFile implements the unary scan RPC
 func (s *GRPCServer) ScanFile(ctx context.Context, req *pb.ScanFileRequest) (*pb.ScanResponse, error) {
+	logger := GetLogger()
+
 	// Validate request
 	if len(req.Data) == 0 {
+		logger.Warn("gRPC scan rejected: empty file data")
 		return nil, status.Error(codes.InvalidArgument, "file data is required")
 	}
 
-	if int64(len(req.Data)) > config.MaxContentLength {
+	dataSize := int64(len(req.Data))
+	if dataSize > config.MaxContentLength {
+		logger.Warn("gRPC scan rejected: file too large",
+			zap.Int64("size", dataSize),
+			zap.Int64("max_allowed", config.MaxContentLength),
+			zap.String("filename", req.Filename))
 		return nil, status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", config.MaxContentLength)
 	}
+
+	logger.Debug("gRPC scan started",
+		zap.String("filename", req.Filename),
+		zap.Int64("size", dataSize))
 
 	// Get ClamAV client
 	clam, err := getClamdClient()
 	if err != nil {
+		logger.Error("ClamAV connection failed", zap.Error(err))
 		return nil, status.Errorf(codes.Unavailable, "ClamAV service unavailable: %v", err)
 	}
 
@@ -82,8 +101,18 @@ func (s *GRPCServer) ScanFile(ctx context.Context, req *pb.ScanFileRequest) (*pb
 		elapsed := time.Since(startTime).Seconds()
 
 		if result.Status == "ERROR" {
+			logger.Error("gRPC scan error",
+				zap.String("filename", req.Filename),
+				zap.String("error", result.Description),
+				zap.Float64("elapsed_seconds", elapsed))
 			return nil, status.Errorf(codes.Internal, "scan error: %s", result.Description)
 		}
+
+		logger.Info("gRPC scan completed",
+			zap.String("filename", req.Filename),
+			zap.String("status", result.Status),
+			zap.String("result", result.Description),
+			zap.Float64("elapsed_seconds", elapsed))
 
 		return &pb.ScanResponse{
 			Status:   result.Status,
@@ -93,15 +122,20 @@ func (s *GRPCServer) ScanFile(ctx context.Context, req *pb.ScanFileRequest) (*pb
 		}, nil
 
 	case <-time.After(config.ScanTimeout):
+		logger.Warn("gRPC scan timeout",
+			zap.String("filename", req.Filename),
+			zap.Float64("timeout_seconds", config.ScanTimeout.Seconds()))
 		return nil, status.Errorf(codes.DeadlineExceeded, "scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds())
 
 	case <-ctx.Done():
+		logger.Info("gRPC scan canceled", zap.String("filename", req.Filename))
 		return nil, status.Error(codes.Canceled, "request canceled by client")
 	}
 }
 
 // ScanStream implements the client streaming scan RPC
 func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error {
+	logger := GetLogger()
 	var buffer bytes.Buffer
 	var filename string
 	var totalSize int64
@@ -114,17 +148,23 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 			break
 		}
 		if err != nil {
+			logger.Error("Failed to receive chunk", zap.Error(err))
 			return status.Errorf(codes.Internal, "failed to receive chunk: %v", err)
 		}
 
 		// Store filename from first chunk
 		if filename == "" && req.Filename != "" {
 			filename = req.Filename
+			logger.Debug("gRPC stream scan started", zap.String("filename", filename))
 		}
 
 		// Check size limit before incrementing
 		chunkSize := int64(len(req.Chunk))
 		if totalSize+chunkSize > config.MaxContentLength {
+			logger.Warn("gRPC stream scan rejected: file too large",
+				zap.String("filename", filename),
+				zap.Int64("total_size", totalSize+chunkSize),
+				zap.Int64("max_allowed", config.MaxContentLength))
 			return status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", config.MaxContentLength)
 		}
 

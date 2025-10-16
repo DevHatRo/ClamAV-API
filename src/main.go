@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/dutchcoders/go-clamd"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -106,18 +106,28 @@ func parseConfig() {
 		gin.SetMode(gin.DebugMode)
 	}
 
-	// Log configuration
-	log.Printf("Configuration:")
-	log.Printf("Debug: %v", config.Debug)
-	log.Printf("ClamAV Socket: %s", config.ClamdUnixSocket)
-	log.Printf("Max Content Length: %d bytes", config.MaxContentLength)
-	log.Printf("Scan Timeout: %.0f seconds", config.ScanTimeout.Seconds())
-	log.Printf("REST API Address: %s:%s", config.Host, config.Port)
-	log.Printf("gRPC Enabled: %v", config.EnableGRPC)
-	if config.EnableGRPC {
-		log.Printf("gRPC Address: %s:%s", config.Host, config.GRPCPort)
+	// Initialize logger
+	env := "development"
+	if os.Getenv("ENV") == "production" {
+		env = "production"
 	}
-	log.Printf("Gin Mode: %s", gin.Mode())
+	if err := InitLogger(config.Debug, env); err != nil {
+		fmt.Printf("Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Log configuration
+	logger := GetLogger()
+	logger.Info("Configuration loaded",
+		zap.Bool("debug", config.Debug),
+		zap.String("clamav_socket", config.ClamdUnixSocket),
+		zap.Int64("max_content_length", config.MaxContentLength),
+		zap.Float64("scan_timeout_seconds", config.ScanTimeout.Seconds()),
+		zap.String("rest_api_address", fmt.Sprintf("%s:%s", config.Host, config.Port)),
+		zap.Bool("grpc_enabled", config.EnableGRPC),
+		zap.String("grpc_address", fmt.Sprintf("%s:%s", config.Host, config.GRPCPort)),
+		zap.String("gin_mode", gin.Mode()),
+	)
 }
 
 func getClamdClient() (*clamd.Clamd, error) {
@@ -128,9 +138,14 @@ func getClamdClient() (*clamd.Clamd, error) {
 }
 
 func handleScan(c *gin.Context) {
+	logger := GetLogger()
+
 	// Get the uploaded file
-	file, _, err := c.Request.FormFile("file")
+	file, header, err := c.Request.FormFile("file")
 	if err != nil {
+		logger.Warn("File upload failed",
+			zap.String("client_ip", c.ClientIP()),
+			zap.Error(err))
 		c.JSON(400, gin.H{
 			"message": "Provide a single file",
 		})
@@ -138,9 +153,15 @@ func handleScan(c *gin.Context) {
 	}
 	defer file.Close()
 
+	logger.Debug("File received for scanning",
+		zap.String("filename", header.Filename),
+		zap.Int64("size", header.Size),
+		zap.String("client_ip", c.ClientIP()))
+
 	// Initialize ClamAV client
 	clam, err := getClamdClient()
 	if err != nil {
+		logger.Error("ClamAV connection failed", zap.Error(err))
 		c.JSON(502, gin.H{
 			"status":  "Clamd service down",
 			"message": err.Error(),
@@ -157,6 +178,9 @@ func handleScan(c *gin.Context) {
 
 	response, scanErr := clam.ScanStream(file, done)
 	if scanErr != nil {
+		logger.Error("Scan stream failed",
+			zap.String("filename", header.Filename),
+			zap.Error(scanErr))
 		c.JSON(502, gin.H{
 			"status":  "Clamd service down",
 			"message": scanErr.Error(),
@@ -170,6 +194,10 @@ func handleScan(c *gin.Context) {
 		elapsed := time.Since(startTime).Seconds()
 
 		if result.Status == "ERROR" {
+			logger.Error("Scan error",
+				zap.String("filename", header.Filename),
+				zap.String("error", result.Description),
+				zap.Float64("elapsed_seconds", elapsed))
 			c.JSON(502, gin.H{
 				"status":  "Clamd service down",
 				"message": result.Description,
@@ -177,12 +205,22 @@ func handleScan(c *gin.Context) {
 			return
 		}
 
+		logger.Info("Scan completed",
+			zap.String("filename", header.Filename),
+			zap.String("status", result.Status),
+			zap.String("result", result.Description),
+			zap.Float64("elapsed_seconds", elapsed),
+			zap.String("client_ip", c.ClientIP()))
+
 		c.JSON(200, gin.H{
 			"status":  result.Status,
 			"message": result.Description,
 			"time":    elapsed,
 		})
 	case <-time.After(config.ScanTimeout):
+		logger.Warn("Scan timeout",
+			zap.String("filename", header.Filename),
+			zap.Float64("timeout_seconds", config.ScanTimeout.Seconds()))
 		c.JSON(504, gin.H{
 			"status":  "Scan timeout",
 			"message": fmt.Sprintf("Scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds()),
@@ -191,9 +229,12 @@ func handleScan(c *gin.Context) {
 }
 
 func handleStreamScan(c *gin.Context) {
+	logger := GetLogger()
+
 	// Initialize ClamAV client
 	clam, err := getClamdClient()
 	if err != nil {
+		logger.Error("ClamAV connection failed", zap.Error(err))
 		c.JSON(502, gin.H{
 			"status":  "Clamd service down",
 			"message": err.Error(),
@@ -204,17 +245,28 @@ func handleStreamScan(c *gin.Context) {
 	// Check content length - reject if missing, -1, or too large
 	contentLength := c.Request.ContentLength
 	if contentLength <= 0 {
+		logger.Warn("Stream scan rejected: missing or invalid Content-Length",
+			zap.Int64("content_length", contentLength),
+			zap.String("client_ip", c.ClientIP()))
 		c.JSON(400, gin.H{
 			"message": "Content-Length header is required and must be greater than 0",
 		})
 		return
 	}
 	if contentLength > config.MaxContentLength {
+		logger.Warn("Stream scan rejected: file too large",
+			zap.Int64("content_length", contentLength),
+			zap.Int64("max_allowed", config.MaxContentLength),
+			zap.String("client_ip", c.ClientIP()))
 		c.JSON(400, gin.H{
 			"message": fmt.Sprintf("File too large. Maximum size is %d bytes", config.MaxContentLength),
 		})
 		return
 	}
+
+	logger.Debug("Stream scan started",
+		zap.Int64("content_length", contentLength),
+		zap.String("client_ip", c.ClientIP()))
 
 	// Wrap body with a LimitedReader to enforce size limit
 	body := c.Request.Body
@@ -233,6 +285,7 @@ func handleStreamScan(c *gin.Context) {
 
 	response, scanErr := clam.ScanStream(limitedReader, done)
 	if scanErr != nil {
+		logger.Error("Stream scan failed", zap.Error(scanErr))
 		c.JSON(502, gin.H{
 			"status":  "Clamd service down",
 			"message": scanErr.Error(),
@@ -246,6 +299,9 @@ func handleStreamScan(c *gin.Context) {
 		elapsed := time.Since(startTime).Seconds()
 
 		if result.Status == "ERROR" {
+			logger.Error("Stream scan error",
+				zap.String("error", result.Description),
+				zap.Float64("elapsed_seconds", elapsed))
 			c.JSON(502, gin.H{
 				"status":  "Clamd service down",
 				"message": result.Description,
@@ -253,12 +309,22 @@ func handleStreamScan(c *gin.Context) {
 			return
 		}
 
+		logger.Info("Stream scan completed",
+			zap.String("status", result.Status),
+			zap.String("result", result.Description),
+			zap.Int64("content_length", contentLength),
+			zap.Float64("elapsed_seconds", elapsed),
+			zap.String("client_ip", c.ClientIP()))
+
 		c.JSON(200, gin.H{
 			"status":  result.Status,
 			"message": result.Description,
 			"time":    elapsed,
 		})
 	case <-time.After(config.ScanTimeout):
+		logger.Warn("Stream scan timeout",
+			zap.Int64("content_length", contentLength),
+			zap.Float64("timeout_seconds", config.ScanTimeout.Seconds()))
 		c.JSON(504, gin.H{
 			"status":  "Scan timeout",
 			"message": fmt.Sprintf("Scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds()),
@@ -267,8 +333,11 @@ func handleStreamScan(c *gin.Context) {
 }
 
 func handleHealthCheck(c *gin.Context) {
+	logger := GetLogger()
+
 	clam, err := getClamdClient()
 	if err != nil {
+		logger.Warn("Health check failed: connection error", zap.Error(err))
 		c.JSON(502, gin.H{
 			"message": "Clamd service unavailable",
 		})
@@ -278,12 +347,14 @@ func handleHealthCheck(c *gin.Context) {
 	// Ping ClamAV
 	err = clam.Ping()
 	if err != nil {
+		logger.Warn("Health check failed: ping error", zap.Error(err))
 		c.JSON(502, gin.H{
 			"message": "Clamd service down",
 		})
 		return
 	}
 
+	logger.Debug("Health check passed")
 	c.JSON(200, gin.H{
 		"message": "ok",
 	})
@@ -292,6 +363,11 @@ func handleHealthCheck(c *gin.Context) {
 func main() {
 	// Parse configuration
 	parseConfig()
+
+	// Ensure logger is synced on exit
+	defer SyncLogger()
+
+	logger := GetLogger()
 
 	// Create error channel
 	errChan := make(chan error, 2)
@@ -310,13 +386,15 @@ func main() {
 
 	select {
 	case err := <-errChan:
-		log.Fatalf("Server error: %v", err)
+		logger.Fatal("Server error", zap.Error(err))
 	case sig := <-sigChan:
-		log.Printf("Received signal: %v, shutting down...", sig)
+		logger.Info("Shutting down gracefully", zap.String("signal", sig.String()))
 	}
 }
 
 func startRESTServer(errChan chan<- error) {
+	logger := GetLogger()
+
 	// Initialize router
 	router := gin.Default()
 
@@ -330,17 +408,23 @@ func startRESTServer(errChan chan<- error) {
 
 	// Start server
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
-	log.Printf("Starting REST API server on %s", addr)
+	logger.Info("Starting REST API server", zap.String("address", addr))
 	if err := router.Run(addr); err != nil {
+		logger.Error("REST server error", zap.Error(err))
 		errChan <- fmt.Errorf("REST server error: %w", err)
 	}
 }
 
 func startGRPCServer(errChan chan<- error) {
+	logger := GetLogger()
+
 	// Create TCP listener
 	addr := fmt.Sprintf("%s:%s", config.Host, config.GRPCPort)
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
+		logger.Error("Failed to create gRPC listener",
+			zap.String("address", addr),
+			zap.Error(err))
 		errChan <- fmt.Errorf("failed to listen on %s: %w", addr, err)
 		return
 	}
@@ -358,9 +442,12 @@ func startGRPCServer(errChan chan<- error) {
 	// Register reflection service for debugging
 	reflection.Register(grpcServer)
 
-	log.Printf("Starting gRPC server on %s", addr)
-	log.Printf("gRPC max message size: %d bytes", maxMsgSize)
+	logger.Info("Starting gRPC server",
+		zap.String("address", addr),
+		zap.Int("max_message_size", maxMsgSize))
+
 	if err := grpcServer.Serve(lis); err != nil {
+		logger.Error("gRPC server error", zap.Error(err))
 		errChan <- fmt.Errorf("gRPC server error: %w", err)
 	}
 }
