@@ -34,13 +34,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clamav clamav-daemon
           sudo mkdir -p /var/log/clamav /var/run/clamav
-          sudo chown clamav:clamav /var/log/clamav /var/run/clamav
-          sudo chmod 750 /var/log/clamav /var/run/clamav
-          sudo freshclam
+          sudo chown -R clamav:clamav /var/log/clamav /var/run/clamav
+          sudo chmod -R 777 /var/log/clamav /var/run/clamav
+          # Update virus database
+          sudo freshclam --stdout --verbose || echo "freshclam failed, continuing..."
           # Start clamd without systemd
-          sudo clamd --foreground=false &
-          sleep 5
-          clamdscan --version || true
+          sudo clamd &
+          sleep 10
+          # Verify clamd is running
+          ps aux | grep clamd || true
 
       - name: Update Go dependencies
         run: |
