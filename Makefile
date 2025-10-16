@@ -16,7 +16,7 @@ proto:
 # Build the application (current platform)
 build:
 	@echo "Building application for current platform..."
-	cd src && go build -o ../clamav-api main.go grpc_server.go
+	cd src && go build -o ../clamav-api .
 
 # Build for all platforms
 build-all:
