@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 
 	pb "clamav-api/proto"
 
@@ -28,7 +29,7 @@ func init() {
 		Host:             "0.0.0.0",
 		Port:             "6000",
 		GRPCPort:         "9000",
-		ScanTimeout:      300,
+		ScanTimeout:      300 * time.Second,
 		EnableGRPC:       true,
 	}
 
