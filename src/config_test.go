@@ -202,4 +202,3 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, 300*time.Second, config.ScanTimeout)
 	assert.Equal(t, true, config.EnableGRPC)
 }
-

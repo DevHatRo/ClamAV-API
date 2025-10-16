@@ -520,7 +520,6 @@ func TestGRPCResponseFields(t *testing.T) {
 	assert.Equal(t, "fields-test.txt", resp.Filename)
 }
 
-
 func BenchmarkGRPCScanFile(b *testing.B) {
 	client := getTestClient(&testing.T{})
 

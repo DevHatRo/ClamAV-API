@@ -109,15 +109,15 @@ func TestHandleScanMultipleFiles(t *testing.T) {
 	// Create multipart with multiple files (not supported)
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	
+
 	// Add first file
 	part1, _ := writer.CreateFormFile("file1", "test1.txt")
 	part1.Write([]byte("test1"))
-	
+
 	// Add second file
 	part2, _ := writer.CreateFormFile("file2", "test2.txt")
 	part2.Write([]byte("test2"))
-	
+
 	writer.Close()
 
 	w := httptest.NewRecorder()
@@ -237,10 +237,10 @@ func TestResponseFormat(t *testing.T) {
 	// Verify types
 	_, ok := response["status"].(string)
 	assert.True(t, ok, "status should be string")
-	
+
 	_, ok = response["message"].(string)
 	assert.True(t, ok, "message should be string")
-	
+
 	_, ok = response["time"].(float64)
 	assert.True(t, ok, "time should be float64")
 }
@@ -262,4 +262,3 @@ func TestHealthCheckResponseFormat(t *testing.T) {
 	assert.Contains(t, response, "message")
 	assert.NotEmpty(t, response["message"])
 }
-
