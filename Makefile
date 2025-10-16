@@ -13,10 +13,15 @@ proto:
 	fi
 	@./scripts/generate-proto.sh
 
-# Build the application
+# Build the application (current platform)
 build:
-	@echo "Building application..."
+	@echo "Building application for current platform..."
 	cd src && go build -o ../clamav-api main.go grpc_server.go
+
+# Build for all platforms
+build-all:
+	@echo "Building for all platforms..."
+	./scripts/build.sh
 
 # Run tests
 test:
@@ -80,7 +85,8 @@ help:
 	@echo "Available targets:"
 	@echo "  make all              - Generate proto files and build"
 	@echo "  make proto            - Generate protobuf code"
-	@echo "  make build            - Build the application"
+	@echo "  make build            - Build the application (current platform)"
+	@echo "  make build-all        - Build for all platforms (Linux, macOS, Windows)"
 	@echo "  make test             - Run unit tests"
 	@echo "  make test-all         - Run all tests including integration"
 	@echo "  make test-integration - Run integration tests only"
