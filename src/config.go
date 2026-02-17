@@ -66,7 +66,7 @@ func getEnvInt64WithDefault(key string, defaultValue int64) int64 {
 
 var config = Config{
 	Debug:            false,
-	ClamdUnixSocket:  "/run/clamav/clamd.ctl",
+	ClamdUnixSocket:  getEnvWithDefault("CLAMAV_SOCKET", "/run/clamav/clamd.ctl"),
 	MaxContentLength: 209715200, // 200MB
 	Host:             "0.0.0.0",
 	Port:             "6000",

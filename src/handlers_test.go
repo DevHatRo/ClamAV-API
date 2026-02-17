@@ -2,16 +2,20 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 func TestHandleScanNoFile(t *testing.T) {
@@ -284,4 +288,129 @@ func TestHealthCheckResponseFormat(t *testing.T) {
 	// Verify response structure
 	assert.Contains(t, response, "message")
 	assert.NotEmpty(t, response["message"])
+}
+
+func TestRespondScanErrorTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/scan", nil)
+
+	scanErr := &ScanTimeoutError{Timeout: 30 * time.Second}
+	respondScanError(c, zap.NewNop(), scanErr, "test.txt")
+
+	assert.Equal(t, 504, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "Scan timeout", response["status"])
+	assert.Contains(t, response["message"], "timed out")
+}
+
+func TestRespondScanErrorContextCanceled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/scan", nil)
+
+	respondScanError(c, zap.NewNop(), context.Canceled, "test.txt")
+
+	assert.Equal(t, 499, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "Client closed request", response["status"])
+	assert.Contains(t, response["message"], "canceled")
+}
+
+func TestRespondScanErrorEngineError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/scan", nil)
+
+	scanErr := &ScanEngineError{Description: "engine broke", ScanTime: 1.0}
+	respondScanError(c, zap.NewNop(), scanErr, "test.txt")
+
+	assert.Equal(t, 502, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "Clamd service down", response["status"])
+	assert.Equal(t, "engine broke", response["message"])
+}
+
+func TestRespondScanErrorDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/scan", nil)
+
+	respondScanError(c, zap.NewNop(), errors.New("unknown error"), "test.txt")
+
+	assert.Equal(t, 502, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "Clamd service down", response["status"])
+	assert.Equal(t, "Scanning service unavailable", response["message"])
+}
+
+func TestHandleVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.Default()
+	router.GET("/api/version", handleVersion)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/version", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Contains(t, response, "version")
+	assert.Contains(t, response, "commit")
+	assert.Contains(t, response, "build")
+	assert.Equal(t, Version, response["version"])
+	assert.Equal(t, CommitHash, response["commit"])
+	assert.Equal(t, BuildTime, response["build"])
+}
+
+func TestHandleScanFileTooLarge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Use a small temporary limit to avoid allocating 200MB in tests
+	origMaxSize := config.MaxContentLength
+	config.MaxContentLength = 1024 // 1KB limit
+	defer func() { config.MaxContentLength = origMaxSize }()
+
+	router := gin.Default()
+	router.MaxMultipartMemory = config.MaxContentLength
+	router.POST("/api/scan", handleScan)
+
+	// Create multipart with file size exceeding the temporary limit
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("file", "huge.bin")
+	data := make([]byte, config.MaxContentLength+1) // 1025 bytes
+	part.Write(data)
+	writer.Close()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/scan", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, 413, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Contains(t, response["message"], "too large")
 }

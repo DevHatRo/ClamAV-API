@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -13,7 +14,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -25,7 +28,7 @@ func init() {
 	// Initialize config for tests
 	config = Config{
 		Debug:            false,
-		ClamdUnixSocket:  "/var/run/clamav/clamd.ctl",
+		ClamdUnixSocket:  getEnvWithDefault("CLAMAV_SOCKET", "/var/run/clamav/clamd.ctl"),
 		MaxContentLength: 209715200,
 		Host:             "0.0.0.0",
 		Port:             "6000",
@@ -391,15 +394,21 @@ func TestGRPCContextCancellation(t *testing.T) {
 	assert.Contains(t, err.Error(), "context canceled")
 }
 
-func TestGRPCHealthCheckWithInvalidSocket(t *testing.T) {
-	// Save original config
+// withInvalidSocket temporarily sets config.ClamdUnixSocket to an invalid path,
+// resets the clamd client, and registers a cleanup to restore the original value.
+func withInvalidSocket(t *testing.T) {
+	t.Helper()
 	originalSocket := config.ClamdUnixSocket
 	config.ClamdUnixSocket = "/invalid/socket.ctl"
 	resetClamdClient()
-	defer func() {
+	t.Cleanup(func() {
 		config.ClamdUnixSocket = originalSocket
 		resetClamdClient()
-	}()
+	})
+}
+
+func TestGRPCHealthCheckWithInvalidSocket(t *testing.T) {
+	withInvalidSocket(t)
 
 	server := NewGRPCServer(&config)
 	resp, err := server.HealthCheck(context.Background(), &pb.HealthCheckRequest{})
@@ -583,4 +592,116 @@ func BenchmarkGRPCScanStream(b *testing.B) {
 			b.Skip("ClamAV not available")
 		}
 	}
+}
+
+func TestMapScanErrorToGRPC(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		expectedCode codes.Code
+		msgContains  string
+	}{
+		{
+			name:         "context canceled maps to Canceled",
+			err:          context.Canceled,
+			expectedCode: codes.Canceled,
+			msgContains:  "canceled",
+		},
+		{
+			name:         "ScanTimeoutError maps to DeadlineExceeded",
+			err:          &ScanTimeoutError{Timeout: 30 * time.Second},
+			expectedCode: codes.DeadlineExceeded,
+			msgContains:  "timed out",
+		},
+		{
+			name:         "ScanEngineError maps to Internal",
+			err:          &ScanEngineError{Description: "engine failure", ScanTime: 1.0},
+			expectedCode: codes.Internal,
+			msgContains:  "engine failure",
+		},
+		{
+			name:         "generic error maps to Internal",
+			err:          errors.New("something went wrong"),
+			expectedCode: codes.Internal,
+			msgContains:  "something went wrong",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			grpcErr := mapScanErrorToGRPC(tt.err)
+			assert.Error(t, grpcErr)
+
+			st, ok := status.FromError(grpcErr)
+			assert.True(t, ok, "should be a gRPC status error")
+			assert.Equal(t, tt.expectedCode, st.Code())
+			assert.Contains(t, st.Message(), tt.msgContains)
+		})
+	}
+}
+
+func TestGRPCScanFileWithInvalidSocketErrorDetails(t *testing.T) {
+	withInvalidSocket(t)
+
+	server := NewGRPCServer(&config)
+	_, err := server.ScanFile(context.Background(), &pb.ScanFileRequest{
+		Data:     []byte("test data"),
+		Filename: "test.txt",
+	})
+
+	assert.Error(t, err)
+	st, ok := status.FromError(err)
+	assert.True(t, ok)
+	assert.Equal(t, codes.Internal, st.Code())
+	assert.Contains(t, st.Message(), "scan failed")
+}
+
+func TestGRPCScanStreamWithInvalidSocket(t *testing.T) {
+	withInvalidSocket(t)
+
+	client := getTestClient(t)
+
+	stream, err := client.ScanStream(context.Background())
+	assert.NoError(t, err)
+
+	err = stream.Send(&pb.ScanStreamRequest{
+		Chunk:    []byte("test data"),
+		Filename: "test.txt",
+		IsLast:   true,
+	})
+	assert.NoError(t, err)
+
+	_, err = stream.CloseAndRecv()
+	assert.Error(t, err)
+	st, ok := status.FromError(err)
+	assert.True(t, ok)
+	assert.Equal(t, codes.Internal, st.Code())
+}
+
+func TestGRPCScanMultipleWithInvalidSocket(t *testing.T) {
+	withInvalidSocket(t)
+
+	client := getTestClient(t)
+
+	stream, err := client.ScanMultiple(context.Background())
+	assert.NoError(t, err)
+
+	// Send a file
+	err = stream.Send(&pb.ScanStreamRequest{
+		Chunk:    []byte("test data"),
+		Filename: "test.txt",
+		IsLast:   true,
+	})
+	assert.NoError(t, err)
+
+	err = stream.CloseSend()
+	assert.NoError(t, err)
+
+	// Receive response - scanAndRespond sends error in response body, not as gRPC error
+	resp, err := stream.Recv()
+	if !assert.NoError(t, err, "stream.Recv should return a response, not an error") {
+		t.Fatalf("unexpected Recv error: %v", err)
+	}
+	assert.Equal(t, "ERROR", resp.Status)
+	assert.Contains(t, resp.Message, "clamd unavailable")
 }

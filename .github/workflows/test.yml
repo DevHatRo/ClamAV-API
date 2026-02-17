@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  CLAMAV_SOCKET: /var/run/clamav/clamd.ctl
+
 jobs:
   test:
     name: Run Tests
@@ -32,48 +35,58 @@ jobs:
         run: |
           ./scripts/generate-proto.sh
 
-      - name: Install ClamAV
+      - name: Install and start ClamAV
         run: |
           sudo apt-get update
-          sudo apt-get install -y clamav clamav-daemon
+          sudo apt-get install -y clamav clamav-daemon socat
+
           sudo mkdir -p /var/log/clamav /var/run/clamav
           sudo chown -R clamav:clamav /var/log/clamav /var/run/clamav
           sudo chmod -R 777 /var/log/clamav /var/run/clamav
+
+          # Stop freshclam if running (conflicts with manual invocation)
+          sudo systemctl stop clamav-freshclam 2>/dev/null || true
+
           # Update virus database
-          sudo freshclam --stdout --verbose || echo "freshclam failed, continuing..."
-          # Start clamd without systemd
+          sudo freshclam --stdout || echo "freshclam update failed, continuing with bundled DB..."
+
+          # Start clamd in the background
           sudo clamd &
-          # Wait for clamd to be ready (check socket availability)
-          for i in $(seq 1 30); do
-            if [ -S /var/run/clamav/clamd.ctl ]; then
-              echo "ClamAV socket is ready after ${i}s"
-              break
+
+          # Wait for the socket to exist AND clamd to respond to PING
+          echo "Waiting for ClamAV daemon to be ready..."
+          for i in $(seq 1 120); do
+            if [ -S "$CLAMAV_SOCKET" ]; then
+              if echo PING | socat - UNIX-CONNECT:"$CLAMAV_SOCKET" 2>/dev/null | grep -q PONG; then
+                echo "ClamAV is ready and responding after ${i}s"
+                break
+              fi
             fi
-            echo "Waiting for ClamAV socket... (${i}/30)"
+            if [ $((i % 10)) -eq 0 ]; then
+              echo "Still waiting for ClamAV... (${i}/120s)"
+            fi
             sleep 1
           done
-          # Verify clamd is running
-          if ! [ -S /var/run/clamav/clamd.ctl ]; then
-            echo "WARNING: ClamAV socket not found, clamd may not be running"
+
+          # Final verification
+          if ! echo PING | socat - UNIX-CONNECT:"$CLAMAV_SOCKET" 2>/dev/null | grep -q PONG; then
+            echo "ERROR: ClamAV daemon is not responding"
             ps aux | grep clamd || true
-          else
-            echo "ClamAV is running"
+            ls -la /var/run/clamav/ || true
+            exit 1
           fi
+
+          echo "ClamAV daemon verified and responding"
 
       - name: Update Go dependencies
         run: |
           cd src
           go mod tidy
 
-      - name: Run Unit Tests
+      - name: Run all tests
         run: |
           cd src
-          go test -v -short ./... -coverprofile=coverage.txt
-
-      - name: Run gRPC Tests
-        run: |
-          cd src
-          go test -v -run TestGRPC ./...
+          go test -v -race ./... -coverprofile=coverage.txt
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4

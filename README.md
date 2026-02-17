@@ -85,6 +85,11 @@ docker compose up
 curl http://localhost:6000/api/health-check
 ```
 
+#### Version Info
+```bash
+curl http://localhost:6000/api/version
+```
+
 #### Scan File (Multipart Upload)
 ```bash
 curl -F "file=@/path/to/file" http://localhost:6000/api/scan
@@ -180,6 +185,10 @@ Command line flags:
 ./clamav-api -h
   -debug
         Enable debug mode
+  -enable-grpc
+        Enable gRPC server (default true)
+  -grpc-port string
+        gRPC server port (default "9000")
   -host string
         Host to listen on (default "0.0.0.0")
   -max-size int
@@ -201,6 +210,15 @@ Command line flags:
 }
 ```
 
+### Version Response
+```json
+{
+    "version": "1.3.0",
+    "commit": "abc1234",
+    "build": "2025-10-16T12:00:00Z"
+}
+```
+
 ### Scan Response (Clean File)
 ```json
 {
@@ -219,11 +237,27 @@ Command line flags:
 }
 ```
 
-### Scan Response (Timeout)
+### Scan Response (Timeout — HTTP 504)
 ```json
 {
     "status": "Scan timeout",
-    "message": "Scan operation timed out after 300 seconds"
+    "message": "scan operation timed out after 300 seconds"
+}
+```
+
+### Scan Response (Client Canceled — HTTP 499)
+```json
+{
+    "status": "Client closed request",
+    "message": "request canceled by client"
+}
+```
+
+### Scan Response (ClamAV Unavailable — HTTP 502)
+```json
+{
+    "status": "Clamd service down",
+    "message": "Scanning service unavailable"
 }
 ```
 
@@ -295,6 +329,23 @@ ENV=development # DEBUG level
 CLAMAV_DEBUG=true # DEBUG level regardless of ENV
 ```
 
+## Observability
+
+### Prometheus Metrics
+
+The service exposes a `/metrics` endpoint with Prometheus-compatible metrics:
+
+- `clamav_scan_requests_total` — Total scan requests by method and result status
+- `clamav_scan_duration_seconds` — Scan duration histogram
+- `clamav_scans_in_progress` — Number of scans currently in progress
+- `clamav_http_requests_total` — Total HTTP requests by method, path, and status code
+- `clamav_http_request_duration_seconds` — HTTP request duration histogram
+- `clamav_health_check_healthy` — Whether ClamAV is healthy (1) or unhealthy (0)
+
+```bash
+curl http://localhost:6000/metrics
+```
+
 ## Security Features
 
 - ✅ Content-Length validation (stream scan requires valid Content-Length header)
@@ -313,22 +364,21 @@ CLAMAV_DEBUG=true # DEBUG level regardless of ENV
 
 ### Testing
 
-#### Unit Tests
-```bash
-# Run unit tests
-make test
+The test suite requires a running ClamAV daemon. Set `CLAMAV_SOCKET` to point at the clamd socket.
 
-# Or directly with go
-cd src && go test -v -short ./...
+#### Run All Tests
+```bash
+# Run all tests with ClamAV (recommended)
+CLAMAV_SOCKET=/var/run/clamav/clamd.ctl make test-all
+
+# Run unit tests only (skips some ClamAV-dependent assertions)
+make test
 ```
 
 #### Integration Tests
 ```bash
-# Run integration tests (requires running service)
+# Run integration tests (requires running service via docker compose)
 make test-integration
-
-# Run all tests
-make test-all
 ```
 
 #### Coverage Report
@@ -346,22 +396,20 @@ open src/coverage.html
 make bench
 ```
 
-#### Test Categories
+#### Test Files
 
-**Unit Tests** (`grpc_server_test.go`):
-- gRPC health check
-- File scanning (clean and infected)
-- Streaming scans
-- Error handling
-- Size limits
-- Context cancellation
-
-**Integration Tests** (`integration_test.go`):
-- REST vs gRPC performance comparison
-- Concurrent scanning
-- Large file streaming
-- Bidirectional streaming
-- Timeout handling
+| File | Coverage Area |
+|------|--------------|
+| `config_test.go` | Configuration parsing, env var overrides, validation exits, Gin modes |
+| `handlers_test.go` | REST endpoints, error responses (502/504/499), version endpoint |
+| `grpc_server_test.go` | gRPC health check, scan methods, error code mapping, invalid socket handling |
+| `scanner_test.go` | ClamAV scan execution, timeout, context cancellation, error types |
+| `streaming_test.go` | Large file scanning, chunk sizes, special filenames, content types |
+| `metrics_test.go` | Prometheus metrics middleware, scan metrics recording |
+| `logger_test.go` | Logger initialization (production/development), sync |
+| `shutdown_test.go` | Graceful shutdown for REST and gRPC servers |
+| `main_test.go` | End-to-end REST API scan and stream-scan tests |
+| `integration_test.go` | Cross-API performance, concurrent scanning, bidirectional streaming |
 
 Run integration tests with:
 ```bash
@@ -401,7 +449,7 @@ apt-get install protobuf-compiler
 
 # Build
 cd src
-go build -o ../clamav-api main.go grpc_server.go
+go build -o ../clamav-api .
 ```
 
 **Note:** If building without generating proto files, the Docker build will handle proto generation automatically.

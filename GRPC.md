@@ -122,6 +122,21 @@ Scan multiple files with bidirectional streaming.
 
 **Response:** Stream of `ScanResponse` messages
 
+## Error Handling
+
+The gRPC API uses standard gRPC status codes to report errors:
+
+| Scenario | gRPC Code | Description |
+|----------|-----------|-------------|
+| Empty file data | `INVALID_ARGUMENT` | `file data is required` |
+| File exceeds size limit | `INVALID_ARGUMENT` | `file too large, maximum size is N bytes` |
+| ClamAV daemon unavailable | `INTERNAL` | `scan failed: clamd unavailable: ...` |
+| Scan engine error | `INTERNAL` | `scan error: <description>` |
+| Scan timeout | `DEADLINE_EXCEEDED` | `scan operation timed out after N seconds` |
+| Client cancellation | `CANCELED` | `request canceled by client` |
+
+For `ScanMultiple` (bidirectional streaming), per-file errors are returned in the response message with `status: "ERROR"` rather than terminating the stream, allowing the remaining files to be scanned.
+
 ## Client Examples
 
 ### Go Client
