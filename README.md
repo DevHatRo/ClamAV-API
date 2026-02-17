@@ -307,7 +307,7 @@ CLAMAV_DEBUG=true # DEBUG level regardless of ENV
 ## Development
 
 ### Prerequisites
-- Go 1.20 or later
+- Go 1.26 or later
 - ClamAV
 - Docker (optional)
 
@@ -381,7 +381,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t clamav-api:test .
 
 **Prerequisites:**
 - Protocol Buffers compiler (`protoc`)
-- Go 1.20 or later
+- Go 1.26 or later
 
 **Install protoc:**
 ```bash

@@ -152,44 +152,71 @@ func TestGetEnvInt64WithDefault(t *testing.T) {
 }
 
 func TestGetClamdClient(t *testing.T) {
-	// Save original config
+	// Save original client and config
 	originalSocket := config.ClamdUnixSocket
+	originalClient := clamdClient
 
 	tests := []struct {
-		name        string
-		socketPath  string
-		expectError bool
+		name       string
+		socketPath string
 	}{
 		{
-			name:        "valid socket path",
-			socketPath:  "/var/run/clamav/clamd.ctl",
-			expectError: true, // Will error if ClamAV not running
+			name:       "valid socket path",
+			socketPath: "/var/run/clamav/clamd.ctl",
 		},
 		{
-			name:        "invalid socket path",
-			socketPath:  "/nonexistent/path/clamd.ctl",
-			expectError: true,
+			name:       "invalid socket path",
+			socketPath: "/nonexistent/path/clamd.ctl",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config.ClamdUnixSocket = tt.socketPath
-			defer func() { config.ClamdUnixSocket = originalSocket }()
+			clamdClient = nil // Force re-initialization
+			defer func() {
+				config.ClamdUnixSocket = originalSocket
+				clamdClient = originalClient
+			}()
 
-			client, err := getClamdClient()
-
-			if tt.expectError {
-				// Error expected if ClamAV not running
-				if err != nil {
-					assert.Error(t, err)
-					t.Logf("Expected error (ClamAV may not be running): %v", err)
-				} else {
-					assert.NotNil(t, client)
-				}
-			}
+			client := getClamdClient()
+			assert.NotNil(t, client, "getClamdClient should always return a non-nil client")
 		})
 	}
+}
+
+func TestPingClamd(t *testing.T) {
+	// Save original client and config
+	originalSocket := config.ClamdUnixSocket
+	originalClient := clamdClient
+
+	t.Run("ping with invalid socket returns error", func(t *testing.T) {
+		config.ClamdUnixSocket = "/nonexistent/socket.ctl"
+		clamdClient = nil
+		defer func() {
+			config.ClamdUnixSocket = originalSocket
+			clamdClient = originalClient
+		}()
+
+		err := pingClamd()
+		assert.Error(t, err)
+		t.Logf("Expected error: %v", err)
+	})
+
+	t.Run("ping with default socket", func(t *testing.T) {
+		config.ClamdUnixSocket = originalSocket
+		clamdClient = nil
+		defer func() {
+			clamdClient = originalClient
+		}()
+
+		err := pingClamd()
+		if err != nil {
+			t.Logf("Ping failed (ClamAV may not be running): %v", err)
+		} else {
+			t.Log("Ping succeeded - ClamAV is running")
+		}
+	})
 }
 
 func TestConfigDefaults(t *testing.T) {

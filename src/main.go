@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -130,11 +132,26 @@ func parseConfig() {
 	)
 }
 
-func getClamdClient() (*clamd.Clamd, error) {
-	c := clamd.NewClamd("unix://" + config.ClamdUnixSocket)
-	// Test connection
-	err := c.Ping()
-	return c, err
+// clamdClient holds the reusable ClamAV client instance
+var clamdClient *clamd.Clamd
+
+// initClamdClient creates the ClamAV client (call once at startup)
+func initClamdClient() {
+	clamdClient = clamd.NewClamd("unix://" + config.ClamdUnixSocket)
+}
+
+// getClamdClient returns the shared ClamAV client instance.
+// It does NOT ping on every call; use pingClamd() for health checks.
+func getClamdClient() *clamd.Clamd {
+	if clamdClient == nil {
+		initClamdClient()
+	}
+	return clamdClient
+}
+
+// pingClamd checks if the ClamAV daemon is reachable
+func pingClamd() error {
+	return getClamdClient().Ping()
 }
 
 func handleScan(c *gin.Context) {
@@ -158,16 +175,8 @@ func handleScan(c *gin.Context) {
 		zap.Int64("size", header.Size),
 		zap.String("client_ip", c.ClientIP()))
 
-	// Initialize ClamAV client
-	clam, err := getClamdClient()
-	if err != nil {
-		logger.Error("ClamAV connection failed", zap.Error(err))
-		c.JSON(502, gin.H{
-			"status":  "Clamd service down",
-			"message": err.Error(),
-		})
-		return
-	}
+	// Get the shared ClamAV client
+	clam := getClamdClient()
 
 	// Scan the file
 	startTime := time.Now()
@@ -231,18 +240,7 @@ func handleScan(c *gin.Context) {
 func handleStreamScan(c *gin.Context) {
 	logger := GetLogger()
 
-	// Initialize ClamAV client
-	clam, err := getClamdClient()
-	if err != nil {
-		logger.Error("ClamAV connection failed", zap.Error(err))
-		c.JSON(502, gin.H{
-			"status":  "Clamd service down",
-			"message": err.Error(),
-		})
-		return
-	}
-
-	// Check content length - reject if missing, -1, or too large
+	// Validate request before doing any work
 	contentLength := c.Request.ContentLength
 	if contentLength <= 0 {
 		logger.Warn("Stream scan rejected: missing or invalid Content-Length",
@@ -275,6 +273,9 @@ func handleStreamScan(c *gin.Context) {
 		R: body,
 		N: config.MaxContentLength,
 	}
+
+	// Get the shared ClamAV client
+	clam := getClamdClient()
 
 	// Scan the stream
 	startTime := time.Now()
@@ -335,21 +336,11 @@ func handleStreamScan(c *gin.Context) {
 func handleHealthCheck(c *gin.Context) {
 	logger := GetLogger()
 
-	clam, err := getClamdClient()
-	if err != nil {
-		logger.Warn("Health check failed: connection error", zap.Error(err))
+	// Single ping to check ClamAV availability
+	if err := pingClamd(); err != nil {
+		logger.Warn("Health check failed", zap.Error(err))
 		c.JSON(502, gin.H{
 			"message": "Clamd service unavailable",
-		})
-		return
-	}
-
-	// Ping ClamAV
-	err = clam.Ping()
-	if err != nil {
-		logger.Warn("Health check failed: ping error", zap.Error(err))
-		c.JSON(502, gin.H{
-			"message": "Clamd service down",
 		})
 		return
 	}
@@ -369,16 +360,21 @@ func main() {
 
 	logger := GetLogger()
 
+	// Initialize ClamAV client (reused across all requests)
+	initClamdClient()
+	logger.Info("ClamAV client initialized", zap.String("socket", config.ClamdUnixSocket))
+
 	// Create error channel
 	errChan := make(chan error, 2)
 
 	// Start gRPC server if enabled
+	var grpcSrv *grpc.Server
 	if config.EnableGRPC {
-		go startGRPCServer(errChan)
+		grpcSrv = startGRPCServer(errChan)
 	}
 
 	// Start REST API server
-	go startRESTServer(errChan)
+	httpSrv := startRESTServer(errChan)
 
 	// Wait for interrupt signal or error
 	sigChan := make(chan os.Signal, 1)
@@ -388,11 +384,44 @@ func main() {
 	case err := <-errChan:
 		logger.Fatal("Server error", zap.Error(err))
 	case sig := <-sigChan:
-		logger.Info("Shutting down gracefully", zap.String("signal", sig.String()))
+		logger.Info("Received shutdown signal", zap.String("signal", sig.String()))
 	}
+
+	// Graceful shutdown with timeout
+	logger.Info("Initiating graceful shutdown...")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	// Shut down REST server
+	if httpSrv != nil {
+		logger.Info("Shutting down REST server...")
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			logger.Error("REST server forced to shutdown", zap.Error(err))
+		}
+	}
+
+	// Shut down gRPC server
+	if grpcSrv != nil {
+		logger.Info("Shutting down gRPC server...")
+		stopped := make(chan struct{})
+		go func() {
+			grpcSrv.GracefulStop()
+			close(stopped)
+		}()
+
+		select {
+		case <-stopped:
+			logger.Info("gRPC server stopped gracefully")
+		case <-shutdownCtx.Done():
+			logger.Warn("gRPC graceful shutdown timed out, forcing stop")
+			grpcSrv.Stop()
+		}
+	}
+
+	logger.Info("All servers stopped")
 }
 
-func startRESTServer(errChan chan<- error) {
+func startRESTServer(errChan chan<- error) *http.Server {
 	logger := GetLogger()
 
 	// Initialize router
@@ -406,16 +435,25 @@ func startRESTServer(errChan chan<- error) {
 	router.POST("/api/stream-scan", handleStreamScan)
 	router.GET("/api/health-check", handleHealthCheck)
 
-	// Start server
+	// Create HTTP server
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
-	logger.Info("Starting REST API server", zap.String("address", addr))
-	if err := router.Run(addr); err != nil {
-		logger.Error("REST server error", zap.Error(err))
-		errChan <- fmt.Errorf("REST server error: %w", err)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: router,
 	}
+
+	logger.Info("Starting REST API server", zap.String("address", addr))
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("REST server error", zap.Error(err))
+			errChan <- fmt.Errorf("REST server error: %w", err)
+		}
+	}()
+
+	return srv
 }
 
-func startGRPCServer(errChan chan<- error) {
+func startGRPCServer(errChan chan<- error) *grpc.Server {
 	logger := GetLogger()
 
 	// Create TCP listener
@@ -426,7 +464,7 @@ func startGRPCServer(errChan chan<- error) {
 			zap.String("address", addr),
 			zap.Error(err))
 		errChan <- fmt.Errorf("failed to listen on %s: %w", addr, err)
-		return
+		return nil
 	}
 
 	// Create gRPC server with options
@@ -446,8 +484,12 @@ func startGRPCServer(errChan chan<- error) {
 		zap.String("address", addr),
 		zap.Int("max_message_size", maxMsgSize))
 
-	if err := grpcServer.Serve(lis); err != nil {
-		logger.Error("gRPC server error", zap.Error(err))
-		errChan <- fmt.Errorf("gRPC server error: %w", err)
-	}
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.Error("gRPC server error", zap.Error(err))
+			errChan <- fmt.Errorf("gRPC server error: %w", err)
+		}
+	}()
+
+	return grpcServer
 }
