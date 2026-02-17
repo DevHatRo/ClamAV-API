@@ -28,7 +28,7 @@ func main() {
 	logger := GetLogger()
 
 	// Initialize ClamAV client (reused across all requests)
-	initClamdClient()
+	getClamdClient()
 	logger.Info("ClamAV client initialized", zap.String("socket", config.ClamdUnixSocket))
 
 	// Create error channel
