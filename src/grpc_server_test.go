@@ -394,15 +394,21 @@ func TestGRPCContextCancellation(t *testing.T) {
 	assert.Contains(t, err.Error(), "context canceled")
 }
 
-func TestGRPCHealthCheckWithInvalidSocket(t *testing.T) {
-	// Save original config
+// withInvalidSocket temporarily sets config.ClamdUnixSocket to an invalid path,
+// resets the clamd client, and registers a cleanup to restore the original value.
+func withInvalidSocket(t *testing.T) {
+	t.Helper()
 	originalSocket := config.ClamdUnixSocket
 	config.ClamdUnixSocket = "/invalid/socket.ctl"
 	resetClamdClient()
-	defer func() {
+	t.Cleanup(func() {
 		config.ClamdUnixSocket = originalSocket
 		resetClamdClient()
-	}()
+	})
+}
+
+func TestGRPCHealthCheckWithInvalidSocket(t *testing.T) {
+	withInvalidSocket(t)
 
 	server := NewGRPCServer(&config)
 	resp, err := server.HealthCheck(context.Background(), &pb.HealthCheckRequest{})
@@ -635,14 +641,7 @@ func TestMapScanErrorToGRPC(t *testing.T) {
 }
 
 func TestGRPCScanFileWithInvalidSocketErrorDetails(t *testing.T) {
-	// Test that ScanFile returns proper gRPC error codes when ClamAV is unavailable
-	originalSocket := config.ClamdUnixSocket
-	config.ClamdUnixSocket = "/invalid/socket.ctl"
-	resetClamdClient()
-	defer func() {
-		config.ClamdUnixSocket = originalSocket
-		resetClamdClient()
-	}()
+	withInvalidSocket(t)
 
 	server := NewGRPCServer(&config)
 	_, err := server.ScanFile(context.Background(), &pb.ScanFileRequest{
@@ -658,14 +657,7 @@ func TestGRPCScanFileWithInvalidSocketErrorDetails(t *testing.T) {
 }
 
 func TestGRPCScanStreamWithInvalidSocket(t *testing.T) {
-	// Temporarily set global config to invalid socket
-	originalSocket := config.ClamdUnixSocket
-	config.ClamdUnixSocket = "/invalid/socket.ctl"
-	resetClamdClient()
-	defer func() {
-		config.ClamdUnixSocket = originalSocket
-		resetClamdClient()
-	}()
+	withInvalidSocket(t)
 
 	client := getTestClient(t)
 
@@ -687,14 +679,7 @@ func TestGRPCScanStreamWithInvalidSocket(t *testing.T) {
 }
 
 func TestGRPCScanMultipleWithInvalidSocket(t *testing.T) {
-	// Temporarily set global config to invalid socket
-	originalSocket := config.ClamdUnixSocket
-	config.ClamdUnixSocket = "/invalid/socket.ctl"
-	resetClamdClient()
-	defer func() {
-		config.ClamdUnixSocket = originalSocket
-		resetClamdClient()
-	}()
+	withInvalidSocket(t)
 
 	client := getTestClient(t)
 
@@ -714,8 +699,9 @@ func TestGRPCScanMultipleWithInvalidSocket(t *testing.T) {
 
 	// Receive response - scanAndRespond sends error in response body, not as gRPC error
 	resp, err := stream.Recv()
-	if err == nil {
-		assert.Equal(t, "ERROR", resp.Status)
-		assert.Contains(t, resp.Message, "clamd unavailable")
+	if !assert.NoError(t, err, "stream.Recv should return a response, not an error") {
+		t.Fatalf("unexpected Recv error: %v", err)
 	}
+	assert.Equal(t, "ERROR", resp.Status)
+	assert.Contains(t, resp.Message, "clamd unavailable")
 }

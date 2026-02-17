@@ -384,16 +384,21 @@ func TestHandleVersion(t *testing.T) {
 
 func TestHandleScanFileTooLarge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+
+	// Use a small temporary limit to avoid allocating 200MB in tests
+	origMaxSize := config.MaxContentLength
+	config.MaxContentLength = 1024 // 1KB limit
+	defer func() { config.MaxContentLength = origMaxSize }()
+
 	router := gin.Default()
 	router.MaxMultipartMemory = config.MaxContentLength
 	router.POST("/api/scan", handleScan)
 
-	// Create multipart with file size exceeding max
+	// Create multipart with file size exceeding the temporary limit
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "huge.bin")
-	// Write just enough to exceed the limit when combined with multipart overhead
-	data := make([]byte, config.MaxContentLength+1)
+	data := make([]byte, config.MaxContentLength+1) // 1025 bytes
 	part.Write(data)
 	writer.Close()
 
