@@ -68,4 +68,7 @@ VOLUME ["/var/lib/clamav", "/var/run/clamav"]
 WORKDIR /
 EXPOSE 6000 9000
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD sh -c "wget --spider -q http://localhost:${CLAMAV_PORT:-6000}/api/health-check || exit 1"
+
 ENTRYPOINT ["./docker-entrypoint.sh"]
