@@ -135,14 +135,13 @@ func TestHandleHealthCheckWhenClamAVDown(t *testing.T) {
 	router := gin.Default()
 	router.GET("/api/health-check", handleHealthCheck)
 
-	// Save original config and client
+	// Save original config
 	originalSocket := config.ClamdUnixSocket
-	originalClient := clamdClient
 	config.ClamdUnixSocket = "/nonexistent/socket.ctl"
-	clamdClient = nil // Force re-initialization with invalid socket
+	resetClamdClient()
 	defer func() {
 		config.ClamdUnixSocket = originalSocket
-		clamdClient = originalClient
+		resetClamdClient()
 	}()
 
 	w := httptest.NewRecorder()
@@ -162,14 +161,13 @@ func TestHandleScanWithInvalidSocket(t *testing.T) {
 	router := gin.Default()
 	router.POST("/api/scan", handleScan)
 
-	// Save original config and client
+	// Save original config
 	originalSocket := config.ClamdUnixSocket
-	originalClient := clamdClient
 	config.ClamdUnixSocket = "/invalid/socket.ctl"
-	clamdClient = nil // Force re-initialization with invalid socket
+	resetClamdClient()
 	defer func() {
 		config.ClamdUnixSocket = originalSocket
-		clamdClient = originalClient
+		resetClamdClient()
 	}()
 
 	// Create a valid multipart form
@@ -197,14 +195,13 @@ func TestHandleStreamScanWithInvalidSocket(t *testing.T) {
 	router := gin.Default()
 	router.POST("/api/stream-scan", handleStreamScan)
 
-	// Save original config and client
+	// Save original config
 	originalSocket := config.ClamdUnixSocket
-	originalClient := clamdClient
 	config.ClamdUnixSocket = "/invalid/socket.ctl"
-	clamdClient = nil // Force re-initialization with invalid socket
+	resetClamdClient()
 	defer func() {
 		config.ClamdUnixSocket = originalSocket
-		clamdClient = originalClient
+		resetClamdClient()
 	}()
 
 	data := bytes.NewReader([]byte("test data"))
@@ -243,6 +240,10 @@ func TestResponseFormat(t *testing.T) {
 	var response map[string]interface{}
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
+
+	// Only 200 (success) or 502 (ClamAV unavailable) are expected
+	assert.True(t, w.Code == 200 || w.Code == 502,
+		"Expected status 200 or 502, got %d", w.Code)
 
 	// All responses should have status and message
 	assert.Contains(t, response, "status")

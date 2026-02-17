@@ -392,14 +392,13 @@ func TestGRPCContextCancellation(t *testing.T) {
 }
 
 func TestGRPCHealthCheckWithInvalidSocket(t *testing.T) {
-	// Save original config and client
+	// Save original config
 	originalSocket := config.ClamdUnixSocket
-	originalClient := clamdClient
 	config.ClamdUnixSocket = "/invalid/socket.ctl"
-	clamdClient = nil // Force re-initialization with invalid socket
+	resetClamdClient()
 	defer func() {
 		config.ClamdUnixSocket = originalSocket
-		clamdClient = originalClient
+		resetClamdClient()
 	}()
 
 	server := NewGRPCServer()

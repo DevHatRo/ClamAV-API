@@ -152,9 +152,8 @@ func TestGetEnvInt64WithDefault(t *testing.T) {
 }
 
 func TestGetClamdClient(t *testing.T) {
-	// Save original client and config
+	// Save original config
 	originalSocket := config.ClamdUnixSocket
-	originalClient := clamdClient
 
 	tests := []struct {
 		name       string
@@ -173,10 +172,10 @@ func TestGetClamdClient(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config.ClamdUnixSocket = tt.socketPath
-			clamdClient = nil // Force re-initialization
+			resetClamdClient()
 			defer func() {
 				config.ClamdUnixSocket = originalSocket
-				clamdClient = originalClient
+				resetClamdClient()
 			}()
 
 			client := getClamdClient()
@@ -186,16 +185,15 @@ func TestGetClamdClient(t *testing.T) {
 }
 
 func TestPingClamd(t *testing.T) {
-	// Save original client and config
+	// Save original config
 	originalSocket := config.ClamdUnixSocket
-	originalClient := clamdClient
 
 	t.Run("ping with invalid socket returns error", func(t *testing.T) {
 		config.ClamdUnixSocket = "/nonexistent/socket.ctl"
-		clamdClient = nil
+		resetClamdClient()
 		defer func() {
 			config.ClamdUnixSocket = originalSocket
-			clamdClient = originalClient
+			resetClamdClient()
 		}()
 
 		err := pingClamd()
@@ -205,9 +203,10 @@ func TestPingClamd(t *testing.T) {
 
 	t.Run("ping with default socket", func(t *testing.T) {
 		config.ClamdUnixSocket = originalSocket
-		clamdClient = nil
+		resetClamdClient()
 		defer func() {
-			clamdClient = originalClient
+			config.ClamdUnixSocket = originalSocket
+			resetClamdClient()
 		}()
 
 		err := pingClamd()

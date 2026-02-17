@@ -89,18 +89,17 @@ func TestGRPCServerGracefulShutdown(t *testing.T) {
 	// Give the server time to start
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify server is accepting connections
+	// Verify server is accepting connections (NewClient connects lazily; the RPC call establishes it)
 	addr := fmt.Sprintf("127.0.0.1:%s", config.GRPCPort)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	conn, err := grpc.DialContext(ctx, addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock())
-	assert.NoError(t, err, "Should connect to gRPC server before shutdown")
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	assert.NoError(t, err, "Should create gRPC client")
 
 	// Verify the server responds (health check returns response even without ClamAV)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	client := pb.NewClamAVScannerClient(conn)
-	resp, err := client.HealthCheck(context.Background(), &pb.HealthCheckRequest{})
+	resp, err := client.HealthCheck(ctx, &pb.HealthCheckRequest{})
 	assert.NoError(t, err, "HealthCheck RPC should not return error")
 	assert.NotNil(t, resp)
 	conn.Close()

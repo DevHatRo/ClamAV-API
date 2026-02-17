@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -133,7 +134,10 @@ func parseConfig() {
 }
 
 // clamdClient holds the reusable ClamAV client instance
-var clamdClient *clamd.Clamd
+var (
+	clamdClient *clamd.Clamd
+	clamdOnce   sync.Once
+)
 
 // initClamdClient creates the ClamAV client (call once at startup)
 func initClamdClient() {
@@ -142,11 +146,17 @@ func initClamdClient() {
 
 // getClamdClient returns the shared ClamAV client instance.
 // It does NOT ping on every call; use pingClamd() for health checks.
+// Safe for concurrent use from multiple goroutines.
 func getClamdClient() *clamd.Clamd {
-	if clamdClient == nil {
-		initClamdClient()
-	}
+	clamdOnce.Do(initClamdClient)
 	return clamdClient
+}
+
+// resetClamdClient resets the client so the next getClamdClient call
+// re-initializes it. Intended for tests that need to swap the socket path.
+func resetClamdClient() {
+	clamdClient = nil
+	clamdOnce = sync.Once{}
 }
 
 // pingClamd checks if the ClamAV daemon is reachable
