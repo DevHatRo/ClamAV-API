@@ -25,6 +25,19 @@ func handleScan(c *gin.Context) {
 	}
 	defer file.Close()
 
+	// Check file size against maximum allowed
+	if header.Size > config.MaxContentLength {
+		logger.Warn("Scan rejected: file too large",
+			zap.String("filename", header.Filename),
+			zap.Int64("file_size", header.Size),
+			zap.Int64("max_allowed", config.MaxContentLength),
+			zap.String("client_ip", c.ClientIP()))
+		c.JSON(413, gin.H{
+			"message": fmt.Sprintf("File too large. Maximum size is %d bytes", config.MaxContentLength),
+		})
+		return
+	}
+
 	logger.Debug("File received for scanning",
 		zap.String("filename", header.Filename),
 		zap.Int64("size", header.Size),
@@ -85,6 +98,11 @@ func handleScan(c *gin.Context) {
 		logger.Warn("Scan timeout",
 			zap.String("filename", header.Filename),
 			zap.Float64("timeout_seconds", config.ScanTimeout.Seconds()))
+		// Drain the response channel so ScanStream's goroutine can exit
+		go func() {
+			for range response {
+			}
+		}()
 		c.JSON(504, gin.H{
 			"status":  "Scan timeout",
 			"message": fmt.Sprintf("Scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds()),
@@ -181,6 +199,11 @@ func handleStreamScan(c *gin.Context) {
 		logger.Warn("Stream scan timeout",
 			zap.Int64("content_length", contentLength),
 			zap.Float64("timeout_seconds", config.ScanTimeout.Seconds()))
+		// Drain the response channel so ScanStream's goroutine can exit
+		go func() {
+			for range response {
+			}
+		}()
 		c.JSON(504, gin.H{
 			"status":  "Scan timeout",
 			"message": fmt.Sprintf("Scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds()),

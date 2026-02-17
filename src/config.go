@@ -47,6 +47,7 @@ func getEnvBoolWithDefault(key string, defaultValue bool) bool {
 		if err == nil {
 			return boolValue
 		}
+		fmt.Fprintf(os.Stderr, "WARNING: invalid value %q for env var %s: %v; using default %v\n", value, key, err, defaultValue)
 	}
 	return defaultValue
 }
@@ -58,6 +59,7 @@ func getEnvInt64WithDefault(key string, defaultValue int64) int64 {
 		if err == nil {
 			return intValue
 		}
+		fmt.Fprintf(os.Stderr, "WARNING: invalid value %q for env var %s: %v; using default %d\n", value, key, err, defaultValue)
 	}
 	return defaultValue
 }
@@ -98,6 +100,28 @@ func parseConfig() {
 	timeoutSeconds := getEnvInt64WithDefault("CLAMAV_SCAN_TIMEOUT", *scanTimeout)
 	config.ScanTimeout = time.Duration(timeoutSeconds) * time.Second
 
+	// Validate configuration values
+	if config.ScanTimeout <= 0 {
+		fmt.Fprintf(os.Stderr, "FATAL: scan timeout must be > 0, got %v\n", config.ScanTimeout)
+		os.Exit(1)
+	}
+	if config.MaxContentLength <= 0 {
+		fmt.Fprintf(os.Stderr, "FATAL: max content length must be > 0, got %d\n", config.MaxContentLength)
+		os.Exit(1)
+	}
+	if config.ClamdUnixSocket == "" {
+		fmt.Fprintf(os.Stderr, "FATAL: ClamAV Unix socket path must not be empty\n")
+		os.Exit(1)
+	}
+	if portNum, err := strconv.Atoi(config.Port); err != nil || portNum < 1 || portNum > 65535 {
+		fmt.Fprintf(os.Stderr, "FATAL: port must be a valid TCP port (1-65535), got %q\n", config.Port)
+		os.Exit(1)
+	}
+	if grpcPortNum, err := strconv.Atoi(config.GRPCPort); err != nil || grpcPortNum < 1 || grpcPortNum > 65535 {
+		fmt.Fprintf(os.Stderr, "FATAL: gRPC port must be a valid TCP port (1-65535), got %q\n", config.GRPCPort)
+		os.Exit(1)
+	}
+
 	// Set Gin mode based on environment variables
 	if mode := os.Getenv("GIN_MODE"); mode != "" {
 		gin.SetMode(mode)
@@ -137,6 +161,7 @@ func parseConfig() {
 var (
 	clamdClient *clamd.Clamd
 	clamdOnce   sync.Once
+	clamdMu     sync.Mutex
 )
 
 // initClamdClient creates the ClamAV client (call once at startup)
@@ -148,6 +173,8 @@ func initClamdClient() {
 // It does NOT ping on every call; use pingClamd() for health checks.
 // Safe for concurrent use from multiple goroutines.
 func getClamdClient() *clamd.Clamd {
+	clamdMu.Lock()
+	defer clamdMu.Unlock()
 	clamdOnce.Do(initClamdClient)
 	return clamdClient
 }
@@ -155,6 +182,8 @@ func getClamdClient() *clamd.Clamd {
 // resetClamdClient resets the client so the next getClamdClient call
 // re-initializes it. Intended for tests that need to swap the socket path.
 func resetClamdClient() {
+	clamdMu.Lock()
+	defer clamdMu.Unlock()
 	clamdClient = nil
 	clamdOnce = sync.Once{}
 }
