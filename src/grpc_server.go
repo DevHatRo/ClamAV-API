@@ -31,6 +31,7 @@ func (s *GRPCServer) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest
 
 	// Single ping to check ClamAV availability
 	if err := pingClamd(); err != nil {
+		healthCheckStatus.Set(0)
 		logger.Warn("gRPC health check failed", zap.Error(err))
 		return &pb.HealthCheckResponse{
 			Status:  "unhealthy",
@@ -38,6 +39,7 @@ func (s *GRPCServer) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest
 		}, nil
 	}
 
+	healthCheckStatus.Set(1)
 	logger.Debug("gRPC health check passed")
 	return &pb.HealthCheckResponse{
 		Status:  "healthy",
@@ -223,17 +225,20 @@ func (s *GRPCServer) scanAndRespond(buffer *bytes.Buffer, filename string, strea
 	})
 }
 
-// mapScanErrorToGRPC converts scan errors to appropriate gRPC status errors
+// mapScanErrorToGRPC converts scan errors to appropriate gRPC status errors.
+// Uses errors.As/errors.Is so wrapped errors are recognized.
 func mapScanErrorToGRPC(err error) error {
-	switch err.(type) {
-	case *ScanTimeoutError:
-		return status.Error(codes.DeadlineExceeded, err.Error())
-	case *ScanEngineError:
-		return status.Errorf(codes.Internal, "scan error: %s", err.Error())
+	var timeoutErr *ScanTimeoutError
+	var engineErr *ScanEngineError
+
+	switch {
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, "request canceled by client")
+	case errors.As(err, &timeoutErr):
+		return status.Error(codes.DeadlineExceeded, timeoutErr.Error())
+	case errors.As(err, &engineErr):
+		return status.Errorf(codes.Internal, "scan error: %s", engineErr.Error())
 	default:
-		if errors.Is(err, context.Canceled) {
-			return status.Error(codes.Canceled, "request canceled by client")
-		}
 		return status.Errorf(codes.Internal, "scan failed: %v", err)
 	}
 }

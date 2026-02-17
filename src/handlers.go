@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -85,7 +87,7 @@ func handleStreamScan(c *gin.Context) {
 			zap.Int64("content_length", contentLength),
 			zap.Int64("max_allowed", config.MaxContentLength),
 			zap.String("client_ip", c.ClientIP()))
-		c.JSON(400, gin.H{
+		c.JSON(413, gin.H{
 			"message": fmt.Sprintf("File too large. Maximum size is %d bytes", config.MaxContentLength),
 		})
 		return
@@ -129,22 +131,32 @@ func handleStreamScan(c *gin.Context) {
 
 // respondScanError maps scan errors to appropriate HTTP responses
 func respondScanError(c *gin.Context, logger *zap.Logger, err error, filename string) {
-	switch e := err.(type) {
-	case *ScanTimeoutError:
+	var timeoutErr *ScanTimeoutError
+	var engineErr *ScanEngineError
+
+	switch {
+	case errors.As(err, &timeoutErr):
 		logger.Warn("Scan timeout",
 			zap.String("filename", filename),
-			zap.Float64("timeout_seconds", e.Timeout.Seconds()))
+			zap.Float64("timeout_seconds", timeoutErr.Timeout.Seconds()))
 		c.JSON(504, gin.H{
 			"status":  "Scan timeout",
-			"message": e.Error(),
+			"message": timeoutErr.Error(),
 		})
-	case *ScanEngineError:
+	case errors.As(err, &engineErr):
 		logger.Error("Scan error",
 			zap.String("filename", filename),
-			zap.String("error", e.Description))
+			zap.String("error", engineErr.Description))
 		c.JSON(502, gin.H{
 			"status":  "Clamd service down",
-			"message": e.Description,
+			"message": engineErr.Description,
+		})
+	case errors.Is(err, context.Canceled):
+		logger.Info("Scan canceled by client",
+			zap.String("filename", filename))
+		c.JSON(499, gin.H{
+			"status":  "Client closed request",
+			"message": "request canceled by client",
 		})
 	default:
 		logger.Error("Scan failed",
@@ -152,7 +164,7 @@ func respondScanError(c *gin.Context, logger *zap.Logger, err error, filename st
 			zap.Error(err))
 		c.JSON(502, gin.H{
 			"status":  "Clamd service down",
-			"message": err.Error(),
+			"message": "Scanning service unavailable",
 		})
 	}
 }

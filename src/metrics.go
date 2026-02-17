@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strconv"
 	"time"
 
@@ -59,9 +60,16 @@ var (
 	)
 )
 
-// metricsMiddleware records HTTP request metrics for all endpoints
+// metricsMiddleware records HTTP request metrics for all endpoints.
+// Skips /metrics (self-referential) and /api/health-check (high-frequency Docker probe).
 func metricsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		path := c.FullPath()
+		if path == "/metrics" || path == "/api/health-check" {
+			c.Next()
+			return
+		}
+
 		start := time.Now()
 
 		c.Next()
@@ -69,19 +77,22 @@ func metricsMiddleware() gin.HandlerFunc {
 		elapsed := time.Since(start).Seconds()
 		statusCode := strconv.Itoa(c.Writer.Status())
 
-		httpRequestsTotal.WithLabelValues(c.Request.Method, c.FullPath(), statusCode).Inc()
-		httpRequestDuration.WithLabelValues(c.Request.Method, c.FullPath()).Observe(elapsed)
+		httpRequestsTotal.WithLabelValues(c.Request.Method, path, statusCode).Inc()
+		httpRequestDuration.WithLabelValues(c.Request.Method, path).Observe(elapsed)
 	}
 }
 
 // recordScanMetrics records scan-specific metrics (duration and request count)
 func recordScanMetrics(method string, result *ScanResult, err error) {
+	var engineErr *ScanEngineError
+	var timeoutErr *ScanTimeoutError
+
 	status := "ok"
 	if err != nil {
-		switch err.(type) {
-		case *ScanTimeoutError:
+		switch {
+		case errors.As(err, &timeoutErr):
 			status = "timeout"
-		case *ScanEngineError:
+		case errors.As(err, &engineErr):
 			status = "engine_error"
 		default:
 			status = "error"
@@ -94,5 +105,7 @@ func recordScanMetrics(method string, result *ScanResult, err error) {
 
 	if result != nil {
 		scanDurationSeconds.WithLabelValues(method).Observe(result.ScanTime)
+	} else if engineErr != nil && engineErr.ScanTime > 0 {
+		scanDurationSeconds.WithLabelValues(method).Observe(engineErr.ScanTime)
 	}
 }

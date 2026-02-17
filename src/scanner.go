@@ -48,6 +48,9 @@ func performScan(ctx context.Context, reader io.Reader, timeout time.Duration) (
 		return nil, fmt.Errorf("clamd unavailable: %w", err)
 	}
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case result := <-response:
 		elapsed := time.Since(startTime).Seconds()
@@ -65,7 +68,7 @@ func performScan(ctx context.Context, reader io.Reader, timeout time.Duration) (
 			ScanTime:    elapsed,
 		}, nil
 
-	case <-time.After(timeout):
+	case <-timer.C:
 		go func() { for range response {} }()
 		return nil, &ScanTimeoutError{Timeout: timeout}
 

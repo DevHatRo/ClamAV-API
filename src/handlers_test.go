@@ -93,7 +93,7 @@ func TestHandleStreamScanTooLarge(t *testing.T) {
 	req.ContentLength = config.MaxContentLength + 1
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, 400, w.Code)
+	assert.Equal(t, 413, w.Code)
 
 	var response map[string]string
 	err := json.Unmarshal(w.Body.Bytes(), &response)
