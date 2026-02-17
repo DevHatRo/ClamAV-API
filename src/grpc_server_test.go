@@ -40,7 +40,7 @@ func init() {
 		grpc.MaxRecvMsgSize(maxMsgSize),
 		grpc.MaxSendMsgSize(maxMsgSize),
 	)
-	pb.RegisterClamAVScannerServer(s, NewGRPCServer())
+	pb.RegisterClamAVScannerServer(s, NewGRPCServer(&config))
 	go func() {
 		if err := s.Serve(lis); err != nil {
 			panic(err)
@@ -401,7 +401,7 @@ func TestGRPCHealthCheckWithInvalidSocket(t *testing.T) {
 		resetClamdClient()
 	}()
 
-	server := NewGRPCServer()
+	server := NewGRPCServer(&config)
 	resp, err := server.HealthCheck(context.Background(), &pb.HealthCheckRequest{})
 
 	assert.NoError(t, err) // No error from gRPC call itself

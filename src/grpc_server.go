@@ -17,11 +17,12 @@ import (
 // GRPCServer implements the ClamAV gRPC service
 type GRPCServer struct {
 	pb.UnimplementedClamAVScannerServer
+	config *Config
 }
 
-// NewGRPCServer creates a new gRPC server instance
-func NewGRPCServer() *GRPCServer {
-	return &GRPCServer{}
+// NewGRPCServer creates a new gRPC server instance with the given config
+func NewGRPCServer(cfg *Config) *GRPCServer {
+	return &GRPCServer{config: cfg}
 }
 
 // HealthCheck implements the health check RPC
@@ -55,12 +56,12 @@ func (s *GRPCServer) ScanFile(ctx context.Context, req *pb.ScanFileRequest) (*pb
 	}
 
 	dataSize := int64(len(req.Data))
-	if dataSize > config.MaxContentLength {
+	if dataSize > s.config.MaxContentLength {
 		logger.Warn("gRPC scan rejected: file too large",
 			zap.Int64("size", dataSize),
-			zap.Int64("max_allowed", config.MaxContentLength),
+			zap.Int64("max_allowed", s.config.MaxContentLength),
 			zap.String("filename", req.Filename))
-		return nil, status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", config.MaxContentLength)
+		return nil, status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", s.config.MaxContentLength)
 	}
 
 	logger.Debug("gRPC scan started",
@@ -108,11 +109,11 @@ func (s *GRPCServer) ScanFile(ctx context.Context, req *pb.ScanFileRequest) (*pb
 			Filename: req.Filename,
 		}, nil
 
-	case <-time.After(config.ScanTimeout):
+	case <-time.After(s.config.ScanTimeout):
 		logger.Warn("gRPC scan timeout",
 			zap.String("filename", req.Filename),
-			zap.Float64("timeout_seconds", config.ScanTimeout.Seconds()))
-		return nil, status.Errorf(codes.DeadlineExceeded, "scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds())
+			zap.Float64("timeout_seconds", s.config.ScanTimeout.Seconds()))
+		return nil, status.Errorf(codes.DeadlineExceeded, "scan operation timed out after %.0f seconds", s.config.ScanTimeout.Seconds())
 
 	case <-ctx.Done():
 		logger.Info("gRPC scan canceled", zap.String("filename", req.Filename))
@@ -131,7 +132,6 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
-			// Client finished sending
 			break
 		}
 		if err != nil {
@@ -139,40 +139,33 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 			return status.Errorf(codes.Internal, "failed to receive chunk: %v", err)
 		}
 
-		// Store filename from first chunk
 		if filename == "" && req.Filename != "" {
 			filename = req.Filename
 			logger.Debug("gRPC stream scan started", zap.String("filename", filename))
 		}
 
-		// Check size limit before incrementing
 		chunkSize := int64(len(req.Chunk))
-		if totalSize+chunkSize > config.MaxContentLength {
+		if totalSize+chunkSize > s.config.MaxContentLength {
 			logger.Warn("gRPC stream scan rejected: file too large",
 				zap.String("filename", filename),
 				zap.Int64("total_size", totalSize+chunkSize),
-				zap.Int64("max_allowed", config.MaxContentLength))
-			return status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", config.MaxContentLength)
+				zap.Int64("max_allowed", s.config.MaxContentLength))
+			return status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", s.config.MaxContentLength)
 		}
 
-		// Write chunk to buffer
 		if _, err := buffer.Write(req.Chunk); err != nil {
 			return status.Errorf(codes.Internal, "failed to write chunk: %v", err)
 		}
 
-		// Update total size after successful write
 		totalSize += chunkSize
 
-		// If this is the last chunk, break
 		if req.IsLast {
 			break
 		}
 	}
 
-	// Get the shared ClamAV client
 	clam := getClamdClient()
 
-	// Scan the accumulated data
 	startTime := time.Now()
 	reader := bytes.NewReader(buffer.Bytes())
 
@@ -184,7 +177,6 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 		return status.Errorf(codes.Internal, "scan failed: %v", scanErr)
 	}
 
-	// Process scan results with timeout
 	ctx := stream.Context()
 	select {
 	case result := <-response:
@@ -194,7 +186,6 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 			return status.Errorf(codes.Internal, "scan error: %s", result.Description)
 		}
 
-		// Send response to client
 		return stream.SendAndClose(&pb.ScanResponse{
 			Status:   result.Status,
 			Message:  result.Description,
@@ -202,8 +193,8 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 			Filename: filename,
 		})
 
-	case <-time.After(config.ScanTimeout):
-		return status.Errorf(codes.DeadlineExceeded, "scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds())
+	case <-time.After(s.config.ScanTimeout):
+		return status.Errorf(codes.DeadlineExceeded, "scan operation timed out after %.0f seconds", s.config.ScanTimeout.Seconds())
 
 	case <-ctx.Done():
 		return status.Error(codes.Canceled, "request canceled by client")
@@ -219,36 +210,30 @@ func (s *GRPCServer) ScanMultiple(stream pb.ClamAVScanner_ScanMultipleServer) er
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
-			// Client finished sending
 			return nil
 		}
 		if err != nil {
 			return status.Errorf(codes.Internal, "failed to receive chunk: %v", err)
 		}
 
-		// Check size limit
 		chunkSize := int64(len(req.Chunk))
-		if totalSize+chunkSize > config.MaxContentLength {
-			return status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", config.MaxContentLength)
+		if totalSize+chunkSize > s.config.MaxContentLength {
+			return status.Errorf(codes.InvalidArgument, "file too large, maximum size is %d bytes", s.config.MaxContentLength)
 		}
 
-		// Store filename from first chunk
 		if filename == "" && req.Filename != "" {
 			filename = req.Filename
 		}
 
-		// Write chunk to buffer
 		if _, err := buffer.Write(req.Chunk); err != nil {
 			return status.Errorf(codes.Internal, "failed to write chunk: %v", err)
 		}
 
 		totalSize += chunkSize
 
-		// If this is the last chunk, scan and send response
 		if req.IsLast {
 			response, err := s.scanData(&buffer, filename, stream.Context())
 			if err != nil {
-				// Send error response
 				if err := stream.Send(&pb.ScanResponse{
 					Status:   "ERROR",
 					Message:  err.Error(),
@@ -257,13 +242,11 @@ func (s *GRPCServer) ScanMultiple(stream pb.ClamAVScanner_ScanMultipleServer) er
 					return err
 				}
 			} else {
-				// Send successful response
 				if err := stream.Send(response); err != nil {
 					return err
 				}
 			}
 
-			// Reset for next file
 			buffer.Reset()
 			filename = ""
 			totalSize = 0
@@ -273,10 +256,8 @@ func (s *GRPCServer) ScanMultiple(stream pb.ClamAVScanner_ScanMultipleServer) er
 
 // scanData is a helper function to scan data from a buffer
 func (s *GRPCServer) scanData(buffer *bytes.Buffer, filename string, ctx context.Context) (*pb.ScanResponse, error) {
-	// Get the shared ClamAV client
 	clam := getClamdClient()
 
-	// Scan the data
 	startTime := time.Now()
 	reader := bytes.NewReader(buffer.Bytes())
 
@@ -288,7 +269,6 @@ func (s *GRPCServer) scanData(buffer *bytes.Buffer, filename string, ctx context
 		return nil, fmt.Errorf("scan failed: %v", scanErr)
 	}
 
-	// Process scan results with timeout
 	select {
 	case result := <-response:
 		elapsed := time.Since(startTime).Seconds()
@@ -304,8 +284,8 @@ func (s *GRPCServer) scanData(buffer *bytes.Buffer, filename string, ctx context
 			Filename: filename,
 		}, nil
 
-	case <-time.After(config.ScanTimeout):
-		return nil, fmt.Errorf("scan operation timed out after %.0f seconds", config.ScanTimeout.Seconds())
+	case <-time.After(s.config.ScanTimeout):
+		return nil, fmt.Errorf("scan operation timed out after %.0f seconds", s.config.ScanTimeout.Seconds())
 
 	case <-ctx.Done():
 		return nil, fmt.Errorf("request canceled by client")
