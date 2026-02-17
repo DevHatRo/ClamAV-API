@@ -43,8 +43,8 @@ func handleScan(c *gin.Context) {
 		zap.String("client_ip", c.ClientIP()))
 
 	scansInProgress.Inc()
+	defer scansInProgress.Dec()
 	result, scanErr := performScan(c.Request.Context(), file, config.ScanTimeout)
-	scansInProgress.Dec()
 	recordScanMetrics("rest_scan", result, scanErr)
 
 	if scanErr != nil {
@@ -104,8 +104,8 @@ func handleStreamScan(c *gin.Context) {
 	}
 
 	scansInProgress.Inc()
+	defer scansInProgress.Dec()
 	result, scanErr := performScan(c.Request.Context(), limitedReader, config.ScanTimeout)
-	scansInProgress.Dec()
 	recordScanMetrics("rest_stream_scan", result, scanErr)
 
 	if scanErr != nil {

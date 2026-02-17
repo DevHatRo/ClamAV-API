@@ -71,8 +71,8 @@ func (s *GRPCServer) ScanFile(ctx context.Context, req *pb.ScanFileRequest) (*pb
 	reader := bytes.NewReader(req.Data)
 
 	scansInProgress.Inc()
+	defer scansInProgress.Dec()
 	result, err := performScan(ctx, reader, s.config.ScanTimeout)
-	scansInProgress.Dec()
 	recordScanMetrics("grpc_scan", result, err)
 
 	if err != nil {
@@ -139,8 +139,8 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 	reader := bytes.NewReader(buffer.Bytes())
 
 	scansInProgress.Inc()
+	defer scansInProgress.Dec()
 	result, err := performScan(stream.Context(), reader, s.config.ScanTimeout)
-	scansInProgress.Dec()
 	recordScanMetrics("grpc_stream_scan", result, err)
 
 	if err != nil {
@@ -186,30 +186,8 @@ func (s *GRPCServer) ScanMultiple(stream pb.ClamAVScanner_ScanMultipleServer) er
 		totalSize += chunkSize
 
 		if req.IsLast {
-			reader := bytes.NewReader(buffer.Bytes())
-
-			scansInProgress.Inc()
-			result, err := performScan(stream.Context(), reader, s.config.ScanTimeout)
-			scansInProgress.Dec()
-			recordScanMetrics("grpc_scan_multiple", result, err)
-
-			if err != nil {
-				if sendErr := stream.Send(&pb.ScanResponse{
-					Status:   "ERROR",
-					Message:  err.Error(),
-					Filename: filename,
-				}); sendErr != nil {
-					return sendErr
-				}
-			} else {
-				if sendErr := stream.Send(&pb.ScanResponse{
-					Status:   result.Status,
-					Message:  result.Description,
-					ScanTime: result.ScanTime,
-					Filename: filename,
-				}); sendErr != nil {
-					return sendErr
-				}
+			if err := s.scanAndRespond(&buffer, filename, stream); err != nil {
+				return err
 			}
 
 			buffer.Reset()
@@ -217,6 +195,32 @@ func (s *GRPCServer) ScanMultiple(stream pb.ClamAVScanner_ScanMultipleServer) er
 			totalSize = 0
 		}
 	}
+}
+
+// scanAndRespond scans buffered data and sends the result on the stream.
+// Using a separate method scopes the defer for scansInProgress correctly per file.
+func (s *GRPCServer) scanAndRespond(buffer *bytes.Buffer, filename string, stream pb.ClamAVScanner_ScanMultipleServer) error {
+	scansInProgress.Inc()
+	defer scansInProgress.Dec()
+
+	reader := bytes.NewReader(buffer.Bytes())
+	result, err := performScan(stream.Context(), reader, s.config.ScanTimeout)
+	recordScanMetrics("grpc_scan_multiple", result, err)
+
+	if err != nil {
+		return stream.Send(&pb.ScanResponse{
+			Status:   "ERROR",
+			Message:  err.Error(),
+			Filename: filename,
+		})
+	}
+
+	return stream.Send(&pb.ScanResponse{
+		Status:   result.Status,
+		Message:  result.Description,
+		ScanTime: result.ScanTime,
+		Filename: filename,
+	})
 }
 
 // mapScanErrorToGRPC converts scan errors to appropriate gRPC status errors
