@@ -13,6 +13,7 @@ import (
 	pb "clamav-api/proto"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -98,6 +99,7 @@ func startRESTServer(errChan chan<- error) *http.Server {
 
 	// Initialize router
 	router := gin.Default()
+	router.Use(metricsMiddleware())
 
 	// Set maximum multipart memory
 	router.MaxMultipartMemory = config.MaxContentLength
@@ -107,6 +109,7 @@ func startRESTServer(errChan chan<- error) *http.Server {
 	router.POST("/api/stream-scan", handleStreamScan)
 	router.GET("/api/health-check", handleHealthCheck)
 	router.GET("/api/version", handleVersion)
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Create HTTP server
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)

@@ -3,9 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	pb "clamav-api/proto"
 
@@ -68,57 +68,29 @@ func (s *GRPCServer) ScanFile(ctx context.Context, req *pb.ScanFileRequest) (*pb
 		zap.String("filename", req.Filename),
 		zap.Int64("size", dataSize))
 
-	// Get the shared ClamAV client
-	clam := getClamdClient()
-
-	// Scan the file
-	startTime := time.Now()
 	reader := bytes.NewReader(req.Data)
 
-	done := make(chan bool)
-	defer close(done)
+	scansInProgress.Inc()
+	result, err := performScan(ctx, reader, s.config.ScanTimeout)
+	scansInProgress.Dec()
+	recordScanMetrics("grpc_scan", result, err)
 
-	response, scanErr := clam.ScanStream(reader, done)
-	if scanErr != nil {
-		return nil, status.Errorf(codes.Internal, "scan failed: %v", scanErr)
+	if err != nil {
+		return nil, mapScanErrorToGRPC(err)
 	}
 
-	// Process scan results with timeout
-	select {
-	case result := <-response:
-		elapsed := time.Since(startTime).Seconds()
+	logger.Info("gRPC scan completed",
+		zap.String("filename", req.Filename),
+		zap.String("status", result.Status),
+		zap.String("result", result.Description),
+		zap.Float64("elapsed_seconds", result.ScanTime))
 
-		if result.Status == "ERROR" {
-			logger.Error("gRPC scan error",
-				zap.String("filename", req.Filename),
-				zap.String("error", result.Description),
-				zap.Float64("elapsed_seconds", elapsed))
-			return nil, status.Errorf(codes.Internal, "scan error: %s", result.Description)
-		}
-
-		logger.Info("gRPC scan completed",
-			zap.String("filename", req.Filename),
-			zap.String("status", result.Status),
-			zap.String("result", result.Description),
-			zap.Float64("elapsed_seconds", elapsed))
-
-		return &pb.ScanResponse{
-			Status:   result.Status,
-			Message:  result.Description,
-			ScanTime: elapsed,
-			Filename: req.Filename,
-		}, nil
-
-	case <-time.After(s.config.ScanTimeout):
-		logger.Warn("gRPC scan timeout",
-			zap.String("filename", req.Filename),
-			zap.Float64("timeout_seconds", s.config.ScanTimeout.Seconds()))
-		return nil, status.Errorf(codes.DeadlineExceeded, "scan operation timed out after %.0f seconds", s.config.ScanTimeout.Seconds())
-
-	case <-ctx.Done():
-		logger.Info("gRPC scan canceled", zap.String("filename", req.Filename))
-		return nil, status.Error(codes.Canceled, "request canceled by client")
-	}
+	return &pb.ScanResponse{
+		Status:   result.Status,
+		Message:  result.Description,
+		ScanTime: result.ScanTime,
+		Filename: req.Filename,
+	}, nil
 }
 
 // ScanStream implements the client streaming scan RPC
@@ -164,41 +136,23 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 		}
 	}
 
-	clam := getClamdClient()
-
-	startTime := time.Now()
 	reader := bytes.NewReader(buffer.Bytes())
 
-	done := make(chan bool)
-	defer close(done)
+	scansInProgress.Inc()
+	result, err := performScan(stream.Context(), reader, s.config.ScanTimeout)
+	scansInProgress.Dec()
+	recordScanMetrics("grpc_stream_scan", result, err)
 
-	response, scanErr := clam.ScanStream(reader, done)
-	if scanErr != nil {
-		return status.Errorf(codes.Internal, "scan failed: %v", scanErr)
+	if err != nil {
+		return mapScanErrorToGRPC(err)
 	}
 
-	ctx := stream.Context()
-	select {
-	case result := <-response:
-		elapsed := time.Since(startTime).Seconds()
-
-		if result.Status == "ERROR" {
-			return status.Errorf(codes.Internal, "scan error: %s", result.Description)
-		}
-
-		return stream.SendAndClose(&pb.ScanResponse{
-			Status:   result.Status,
-			Message:  result.Description,
-			ScanTime: elapsed,
-			Filename: filename,
-		})
-
-	case <-time.After(s.config.ScanTimeout):
-		return status.Errorf(codes.DeadlineExceeded, "scan operation timed out after %.0f seconds", s.config.ScanTimeout.Seconds())
-
-	case <-ctx.Done():
-		return status.Error(codes.Canceled, "request canceled by client")
-	}
+	return stream.SendAndClose(&pb.ScanResponse{
+		Status:   result.Status,
+		Message:  result.Description,
+		ScanTime: result.ScanTime,
+		Filename: filename,
+	})
 }
 
 // ScanMultiple implements the bidirectional streaming scan RPC
@@ -232,18 +186,29 @@ func (s *GRPCServer) ScanMultiple(stream pb.ClamAVScanner_ScanMultipleServer) er
 		totalSize += chunkSize
 
 		if req.IsLast {
-			response, err := s.scanData(&buffer, filename, stream.Context())
+			reader := bytes.NewReader(buffer.Bytes())
+
+			scansInProgress.Inc()
+			result, err := performScan(stream.Context(), reader, s.config.ScanTimeout)
+			scansInProgress.Dec()
+			recordScanMetrics("grpc_scan_multiple", result, err)
+
 			if err != nil {
-				if err := stream.Send(&pb.ScanResponse{
+				if sendErr := stream.Send(&pb.ScanResponse{
 					Status:   "ERROR",
 					Message:  err.Error(),
 					Filename: filename,
-				}); err != nil {
-					return err
+				}); sendErr != nil {
+					return sendErr
 				}
 			} else {
-				if err := stream.Send(response); err != nil {
-					return err
+				if sendErr := stream.Send(&pb.ScanResponse{
+					Status:   result.Status,
+					Message:  result.Description,
+					ScanTime: result.ScanTime,
+					Filename: filename,
+				}); sendErr != nil {
+					return sendErr
 				}
 			}
 
@@ -254,40 +219,17 @@ func (s *GRPCServer) ScanMultiple(stream pb.ClamAVScanner_ScanMultipleServer) er
 	}
 }
 
-// scanData is a helper function to scan data from a buffer
-func (s *GRPCServer) scanData(buffer *bytes.Buffer, filename string, ctx context.Context) (*pb.ScanResponse, error) {
-	clam := getClamdClient()
-
-	startTime := time.Now()
-	reader := bytes.NewReader(buffer.Bytes())
-
-	done := make(chan bool)
-	defer close(done)
-
-	response, scanErr := clam.ScanStream(reader, done)
-	if scanErr != nil {
-		return nil, fmt.Errorf("scan failed: %v", scanErr)
-	}
-
-	select {
-	case result := <-response:
-		elapsed := time.Since(startTime).Seconds()
-
-		if result.Status == "ERROR" {
-			return nil, fmt.Errorf("scan error: %s", result.Description)
+// mapScanErrorToGRPC converts scan errors to appropriate gRPC status errors
+func mapScanErrorToGRPC(err error) error {
+	switch err.(type) {
+	case *ScanTimeoutError:
+		return status.Error(codes.DeadlineExceeded, err.Error())
+	case *ScanEngineError:
+		return status.Errorf(codes.Internal, "scan error: %s", err.Error())
+	default:
+		if errors.Is(err, context.Canceled) {
+			return status.Error(codes.Canceled, "request canceled by client")
 		}
-
-		return &pb.ScanResponse{
-			Status:   result.Status,
-			Message:  result.Description,
-			ScanTime: elapsed,
-			Filename: filename,
-		}, nil
-
-	case <-time.After(s.config.ScanTimeout):
-		return nil, fmt.Errorf("scan operation timed out after %.0f seconds", s.config.ScanTimeout.Seconds())
-
-	case <-ctx.Done():
-		return nil, fmt.Errorf("request canceled by client")
+		return status.Errorf(codes.Internal, "scan failed: %v", err)
 	}
 }
