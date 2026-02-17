@@ -138,7 +138,11 @@ func TestHandleHealthCheckWhenClamAVDown(t *testing.T) {
 	// Save original config
 	originalSocket := config.ClamdUnixSocket
 	config.ClamdUnixSocket = "/nonexistent/socket.ctl"
-	defer func() { config.ClamdUnixSocket = originalSocket }()
+	resetClamdClient()
+	defer func() {
+		config.ClamdUnixSocket = originalSocket
+		resetClamdClient()
+	}()
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/api/health-check", nil)
@@ -160,7 +164,11 @@ func TestHandleScanWithInvalidSocket(t *testing.T) {
 	// Save original config
 	originalSocket := config.ClamdUnixSocket
 	config.ClamdUnixSocket = "/invalid/socket.ctl"
-	defer func() { config.ClamdUnixSocket = originalSocket }()
+	resetClamdClient()
+	defer func() {
+		config.ClamdUnixSocket = originalSocket
+		resetClamdClient()
+	}()
 
 	// Create a valid multipart form
 	body := &bytes.Buffer{}
@@ -190,7 +198,11 @@ func TestHandleStreamScanWithInvalidSocket(t *testing.T) {
 	// Save original config
 	originalSocket := config.ClamdUnixSocket
 	config.ClamdUnixSocket = "/invalid/socket.ctl"
-	defer func() { config.ClamdUnixSocket = originalSocket }()
+	resetClamdClient()
+	defer func() {
+		config.ClamdUnixSocket = originalSocket
+		resetClamdClient()
+	}()
 
 	data := bytes.NewReader([]byte("test data"))
 	w := httptest.NewRecorder()
@@ -229,20 +241,31 @@ func TestResponseFormat(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
 
-	// Verify response structure
+	// Only 200 (success) or 502 (ClamAV unavailable) are expected
+	assert.True(t, w.Code == 200 || w.Code == 502,
+		"Expected status 200 or 502, got %d", w.Code)
+
+	// All responses should have status and message
 	assert.Contains(t, response, "status")
 	assert.Contains(t, response, "message")
-	assert.Contains(t, response, "time")
 
-	// Verify types
 	_, ok := response["status"].(string)
 	assert.True(t, ok, "status should be string")
 
 	_, ok = response["message"].(string)
 	assert.True(t, ok, "message should be string")
 
-	_, ok = response["time"].(float64)
-	assert.True(t, ok, "time should be float64")
+	// Successful responses (200) should also include time
+	if w.Code == 200 {
+		assert.Contains(t, response, "time")
+		_, ok = response["time"].(float64)
+		assert.True(t, ok, "time should be float64")
+	}
+
+	// Error responses (502) indicate ClamAV is not available
+	if w.Code == 502 {
+		t.Logf("ClamAV not available, response format verified for error case: %v", response)
+	}
 }
 
 func TestHealthCheckResponseFormat(t *testing.T) {

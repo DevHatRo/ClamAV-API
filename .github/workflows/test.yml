@@ -17,8 +17,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache: true
+          cache-dependency-path: src/go.sum
 
       - name: Install Protocol Buffers compiler
         run: |
@@ -40,9 +41,22 @@ jobs:
           sudo freshclam --stdout --verbose || echo "freshclam failed, continuing..."
           # Start clamd without systemd
           sudo clamd &
-          sleep 10
+          # Wait for clamd to be ready (check socket availability)
+          for i in $(seq 1 30); do
+            if [ -S /var/run/clamav/clamd.ctl ]; then
+              echo "ClamAV socket is ready after ${i}s"
+              break
+            fi
+            echo "Waiting for ClamAV socket... (${i}/30)"
+            sleep 1
+          done
           # Verify clamd is running
-          ps aux | grep clamd || true
+          if ! [ -S /var/run/clamav/clamd.ctl ]; then
+            echo "WARNING: ClamAV socket not found, clamd may not be running"
+            ps aux | grep clamd || true
+          else
+            echo "ClamAV is running"
+          fi
 
       - name: Update Go dependencies
         run: |

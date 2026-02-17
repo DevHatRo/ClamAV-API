@@ -28,21 +28,12 @@ func NewGRPCServer() *GRPCServer {
 func (s *GRPCServer) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest) (*pb.HealthCheckResponse, error) {
 	logger := GetLogger()
 
-	clam, err := getClamdClient()
-	if err != nil {
-		logger.Warn("gRPC health check failed: connection error", zap.Error(err))
+	// Single ping to check ClamAV availability
+	if err := pingClamd(); err != nil {
+		logger.Warn("gRPC health check failed", zap.Error(err))
 		return &pb.HealthCheckResponse{
 			Status:  "unhealthy",
 			Message: fmt.Sprintf("ClamAV service unavailable: %v", err),
-		}, nil
-	}
-
-	err = clam.Ping()
-	if err != nil {
-		logger.Warn("gRPC health check failed: ping error", zap.Error(err))
-		return &pb.HealthCheckResponse{
-			Status:  "unhealthy",
-			Message: fmt.Sprintf("ClamAV service down: %v", err),
 		}, nil
 	}
 
@@ -76,12 +67,8 @@ func (s *GRPCServer) ScanFile(ctx context.Context, req *pb.ScanFileRequest) (*pb
 		zap.String("filename", req.Filename),
 		zap.Int64("size", dataSize))
 
-	// Get ClamAV client
-	clam, err := getClamdClient()
-	if err != nil {
-		logger.Error("ClamAV connection failed", zap.Error(err))
-		return nil, status.Errorf(codes.Unavailable, "ClamAV service unavailable: %v", err)
-	}
+	// Get the shared ClamAV client
+	clam := getClamdClient()
 
 	// Scan the file
 	startTime := time.Now()
@@ -182,11 +169,8 @@ func (s *GRPCServer) ScanStream(stream pb.ClamAVScanner_ScanStreamServer) error 
 		}
 	}
 
-	// Get ClamAV client
-	clam, err := getClamdClient()
-	if err != nil {
-		return status.Errorf(codes.Unavailable, "ClamAV service unavailable: %v", err)
-	}
+	// Get the shared ClamAV client
+	clam := getClamdClient()
 
 	// Scan the accumulated data
 	startTime := time.Now()
@@ -289,11 +273,8 @@ func (s *GRPCServer) ScanMultiple(stream pb.ClamAVScanner_ScanMultipleServer) er
 
 // scanData is a helper function to scan data from a buffer
 func (s *GRPCServer) scanData(buffer *bytes.Buffer, filename string, ctx context.Context) (*pb.ScanResponse, error) {
-	// Get ClamAV client
-	clam, err := getClamdClient()
-	if err != nil {
-		return nil, fmt.Errorf("ClamAV service unavailable: %v", err)
-	}
+	// Get the shared ClamAV client
+	clam := getClamdClient()
 
 	// Scan the data
 	startTime := time.Now()

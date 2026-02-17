@@ -533,8 +533,11 @@ func TestGRPCConcurrentRequests(t *testing.T) {
 				Filename: "concurrent.txt",
 			})
 
-			if err != nil && !strings.Contains(err.Error(), "ClamAV") {
-				errors <- err
+			if err != nil {
+				errStr := strings.ToLower(err.Error())
+				if !strings.Contains(errStr, "clamav") && !strings.Contains(errStr, "clamd") {
+					errors <- err
+				}
 			}
 		}(i)
 	}
