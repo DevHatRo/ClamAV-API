@@ -390,9 +390,10 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	var serverErr error
 	select {
-	case err := <-errChan:
-		logger.Fatal("Server error", zap.Error(err))
+	case serverErr = <-errChan:
+		logger.Error("Server error, initiating shutdown", zap.Error(serverErr))
 	case sig := <-sigChan:
 		logger.Info("Received shutdown signal", zap.String("signal", sig.String()))
 	}
@@ -429,6 +430,10 @@ func main() {
 	}
 
 	logger.Info("All servers stopped")
+
+	if serverErr != nil {
+		os.Exit(1)
+	}
 }
 
 func startRESTServer(errChan chan<- error) *http.Server {
