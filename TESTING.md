@@ -324,7 +324,7 @@ Workflow steps:
 
 ```bash
 # Simulate CI environment
-docker run --rm -v $(pwd):/app -w /app golang:1.26 bash -c "
+docker run --rm -v $(pwd):/app -w /app golang:1.27 bash -c "
   apt-get update && 
   apt-get install -y clamav clamav-daemon &&
   freshclam &&
