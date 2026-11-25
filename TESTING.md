@@ -311,7 +311,7 @@ Safe test file that:
 Tests run automatically on:
 - Pull requests
 - Push to main branch
-- Tag creation
+- Releases are cut by release-please: merging its release PR on `main` tags the version, builds binaries and pushes Docker images (use Conventional Commits: `fix:`, `feat:`, `feat!:`)
 
 Workflow steps:
 1. Install ClamAV
